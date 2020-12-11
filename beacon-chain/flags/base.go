@@ -3,6 +3,7 @@
 package flags
 
 import (
+	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/urfave/cli/v2"
 )
 
@@ -11,13 +12,13 @@ var (
 	HTTPWeb3ProviderFlag = &cli.StringFlag{
 		Name:  "http-web3provider",
 		Usage: "A mainchain web3 provider string http endpoint",
-		Value: "https://goerli.prylabs.net",
+		Value: "",
 	}
 	// DepositContractFlag defines a flag for the deposit contract address.
 	DepositContractFlag = &cli.StringFlag{
 		Name:  "deposit-contract",
 		Usage: "Deposit contract address. Beacon chain node will listen logs coming from the deposit contract to determine when validator is eligible to participate.",
-		Value: "0x07b39F4fDE4A38bACe212b546dAc87C58DfE3fDC", // Medalla deposit contract address.
+		Value: params.BeaconNetworkConfig().DepositContractAddress,
 	}
 	// RPCHost defines the host on which the RPC server should listen.
 	RPCHost = &cli.StringFlag{
@@ -69,6 +70,7 @@ var (
 		Name: "grpc-gateway-corsdomain",
 		Usage: "Comma separated list of domains from which to accept cross origin requests " +
 			"(browser enforced). This flag has no effect if not used with --grpc-gateway-port.",
+		Value: "http://localhost:4200,http://localhost:7500,http://127.0.0.1:4200,http://127.0.0.1:7500,http://0.0.0.0:4200,http://0.0.0.0:7500",
 	}
 	// MinSyncPeers specifies the required number of successful peer handshakes in order
 	// to start syncing with external peers.
@@ -81,7 +83,7 @@ var (
 	ContractDeploymentBlock = &cli.IntFlag{
 		Name:  "contract-deployment-block",
 		Usage: "The eth1 block in which the deposit contract was deployed.",
-		Value: 2844925,
+		Value: 11184524,
 	}
 	// SetGCPercent is the percentage of current live allocations at which the garbage collector is to run.
 	SetGCPercent = &cli.IntFlag{
@@ -89,21 +91,10 @@ var (
 		Usage: "The percentage of freshly allocated data to live data on which the gc will be run again.",
 		Value: 100,
 	}
-	// UnsafeSync starts the beacon node from the previously saved head state and syncs from there.
-	UnsafeSync = &cli.BoolFlag{
-		Name:  "unsafe-sync",
+	// HeadSync starts the beacon node from the previously saved head state and syncs from there.
+	HeadSync = &cli.BoolFlag{
+		Name:  "head-sync",
 		Usage: "Starts the beacon node with the previously saved head state instead of finalized state.",
-	}
-	// SlasherCertFlag defines a flag for the slasher TLS certificate.
-	SlasherCertFlag = &cli.StringFlag{
-		Name:  "slasher-tls-cert",
-		Usage: "Certificate for secure slasher gRPC connection. Pass this in order to use slasher gRPC securely.",
-	}
-	// SlasherProviderFlag defines a flag for a slasher RPC provider.
-	SlasherProviderFlag = &cli.StringFlag{
-		Name:  "slasher-provider",
-		Usage: "A slasher provider string endpoint. Can either be an grpc server endpoint.",
-		Value: "127.0.0.1:4002",
 	}
 	// SlotsPerArchivedPoint specifies the number of slots between the archived points, to save beacon state in the cold
 	// section of DB.
@@ -129,14 +120,47 @@ var (
 		Usage: "The factor by which block batch limit may increase on burst.",
 		Value: 10,
 	}
+	// DisableSync disables a node from syncing at start-up. Instead the node enters regular sync
+	// immediately.
+	DisableSync = &cli.BoolFlag{
+		Name:  "disable-sync",
+		Usage: "Starts the beacon node without entering initial sync and instead exits to regular sync immediately.",
+	}
 	// EnableDebugRPCEndpoints as /v1/beacon/state.
 	EnableDebugRPCEndpoints = &cli.BoolFlag{
 		Name:  "enable-debug-rpc-endpoints",
-		Usage: "Enables the debug rpc service, containing utility endpoints such as /eth/v1alpha1/beacon/state. Requires --new-state-mgmt",
+		Usage: "Enables the debug rpc service, containing utility endpoints such as /eth/v1alpha1/beacon/state.",
+	}
+	SubscribeToAllSubnets = &cli.BoolFlag{
+		Name:  "subscribe-all-subnets",
+		Usage: "Subscribe to all possible attestation subnets.",
 	}
 	// HistoricalSlasherNode is a set of beacon node flags required for performing historical detection with a slasher.
 	HistoricalSlasherNode = &cli.BoolFlag{
 		Name:  "historical-slasher-node",
 		Usage: "Enables required flags for serving historical data to a slasher client. Results in additional storage usage",
+	}
+	// ChainID defines a flag to set the chain id. If none is set, it derives this value from NetworkConfig
+	ChainID = &cli.Uint64Flag{
+		Name:  "chain-id",
+		Usage: "Sets the chain id of the beacon chain",
+	}
+	// NetworkID defines a flag to set the network id. If none is set, it derives this value from NetworkConfig
+	NetworkID = &cli.Uint64Flag{
+		Name:  "network-id",
+		Usage: "Sets the network id of the beacon chain.",
+	}
+	// WeakSubjectivityCheckpt defines the weak subjectivity checkpoint the node must sync through to defend against long range attacks.
+	WeakSubjectivityCheckpt = &cli.StringFlag{
+		Name: "weak-subjectivity-checkpoint",
+		Usage: "Input in `block_root:epoch_number` format. This guarantee that syncing leads to the given Weak Subjectivity Checkpoint being in the canonical chain. " +
+			"If such a sync is not possible, the node will treat it a critical and irrecoverable failure",
+		Value: "",
+	}
+	// Eth1HeaderReqLimit defines a flag to set the maximum number of headers that a deposit log query can fetch. If none is set, 1000 will be the limit.
+	Eth1HeaderReqLimit = &cli.Uint64Flag{
+		Name:  "eth1-header-req-limit",
+		Usage: "Sets the maximum number of headers that a deposit log query can fetch.",
+		Value: uint64(1000),
 	}
 )

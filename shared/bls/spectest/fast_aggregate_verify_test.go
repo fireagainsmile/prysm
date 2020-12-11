@@ -2,52 +2,64 @@ package spectest
 
 import (
 	"encoding/hex"
+	"errors"
 	"path"
 	"testing"
 
 	"github.com/ghodss/yaml"
 	"github.com/prysmaticlabs/prysm/shared/bls"
-	"github.com/prysmaticlabs/prysm/shared/bls/iface"
+	"github.com/prysmaticlabs/prysm/shared/bls/common"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestFastAggregateVerifyYaml(t *testing.T) {
+	flags := &featureconfig.Flags{}
+	reset := featureconfig.InitWithReset(flags)
+	t.Run("herumi", testFastAggregateVerifyYaml)
+	reset()
+
+	flags.EnableBlst = true
+	reset = featureconfig.InitWithReset(flags)
+	t.Run("blst", testFastAggregateVerifyYaml)
+	reset()
+}
+
+func testFastAggregateVerifyYaml(t *testing.T) {
 	testFolders, testFolderPath := testutil.TestFolders(t, "general", "bls/fast_aggregate_verify/small")
 
 	for i, folder := range testFolders {
 		t.Run(folder.Name(), func(t *testing.T) {
 			file, err := testutil.BazelFileBytes(path.Join(testFolderPath, folder.Name(), "data.yaml"))
-			if err != nil {
-				t.Fatalf("Failed to read file: %v", err)
-			}
+			require.NoError(t, err)
 			test := &FastAggregateVerifyTest{}
-			if err := yaml.Unmarshal(file, test); err != nil {
-				t.Fatalf("Failed to unmarshal: %v", err)
-			}
+			require.NoError(t, yaml.Unmarshal(file, test))
 
-			pubkeys := make([]iface.PublicKey, len(test.Input.Pubkeys))
+			pubkeys := make([]common.PublicKey, len(test.Input.Pubkeys))
 			for j, raw := range test.Input.Pubkeys {
 				pkBytes, err := hex.DecodeString(raw[2:])
-				if err != nil {
-					t.Fatalf("Cannot decode string to bytes: %v", err)
-				}
+				require.NoError(t, err)
 				pk, err := bls.PublicKeyFromBytes(pkBytes)
 				if err != nil {
-					t.Fatalf("Cannot unmarshal input to secret key: %v", err)
+					if test.Output == false && errors.Is(err, common.ErrInfinitePubKey) {
+						return
+					}
+					t.Fatalf("cannot unmarshal pubkey: %v", err)
 				}
 				pubkeys[j] = pk
 			}
 
-			msgBytes, err := hex.DecodeString(test.Input.Message[2:])
-			if err != nil {
-				t.Fatalf("Cannot decode string to bytes: %v", err)
+			msg := test.Input.Message
+			// TODO(#7632): Remove when https://github.com/ethereum/eth2.0-spec-tests/issues/22 is resolved.
+			if msg == "" {
+				msg = test.Input.Messages
 			}
-
+			msgBytes, err := hex.DecodeString(msg[2:])
+			require.NoError(t, err)
 			sigBytes, err := hex.DecodeString(test.Input.Signature[2:])
-			if err != nil {
-				t.Fatalf("Cannot decode string to bytes: %v", err)
-			}
+			require.NoError(t, err)
 			sig, err := bls.SignatureFromBytes(sigBytes)
 			if err != nil {
 				if test.Output == false {

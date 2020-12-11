@@ -34,7 +34,12 @@ const template = `<html>
 
 // TreeHandler is a handler to serve /tree page in metrics.
 func (s *Service) TreeHandler(w http.ResponseWriter, r *http.Request) {
-	if s.headState(r.Context()) == nil {
+	headState, err := s.HeadState(r.Context())
+	if err != nil {
+		log.WithError(err).Error("Could not get head state")
+		return
+	}
+	if headState == nil {
 		if _, err := w.Write([]byte("Unavailable during initial syncing")); err != nil {
 			log.WithError(err).Error("Failed to render p2p info page")
 		}
@@ -47,25 +52,25 @@ func (s *Service) TreeHandler(w http.ResponseWriter, r *http.Request) {
 	graph.Attr("labeljust", "l")
 
 	dotNodes := make([]*dot.Node, len(nodes))
-	avgBalance := uint64(averageBalance(s.headState(r.Context()).Balances()))
+	avgBalance := uint64(averageBalance(headState.Balances()))
 
 	for i := len(nodes) - 1; i >= 0; i-- {
 		// Construct label for each node.
-		slot := fmt.Sprintf("%d", nodes[i].Slot)
-		weight := fmt.Sprintf("%d", nodes[i].Weight/1e9) // Convert unit Gwei to unit ETH.
-		votes := fmt.Sprintf("%d", nodes[i].Weight/1e9/avgBalance)
+		slot := fmt.Sprintf("%d", nodes[i].Slot())
+		weight := fmt.Sprintf("%d", nodes[i].Weight()/1e9) // Convert unit Gwei to unit ETH.
+		votes := fmt.Sprintf("%d", nodes[i].Weight()/1e9/avgBalance)
 		index := fmt.Sprintf("%d", i)
-		g := nodes[i].Graffiti[:]
+		g := nodes[i].Graffiti()
 		graffiti := hex.EncodeToString(g[:8])
 		label := "slot: " + slot + "\n votes: " + votes + "\n weight: " + weight + "\n graffiti: " + graffiti
 		var dotN dot.Node
-		if nodes[i].Parent != ^uint64(0) {
+		if nodes[i].Parent() != ^uint64(0) {
 			dotN = graph.Node(index).Box().Attr("label", label)
 		}
 
-		if nodes[i].Slot == s.headSlot() &&
-			nodes[i].BestDescendant == ^uint64(0) &&
-			nodes[i].Parent != ^uint64(0) {
+		if nodes[i].Slot() == s.HeadSlot() &&
+			nodes[i].BestDescendant() == ^uint64(0) &&
+			nodes[i].Parent() != ^uint64(0) {
 			dotN = dotN.Attr("color", "green")
 		}
 
@@ -73,8 +78,8 @@ func (s *Service) TreeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i := len(nodes) - 1; i >= 0; i-- {
-		if nodes[i].Parent != ^uint64(0) && nodes[i].Parent < uint64(len(dotNodes)) {
-			graph.Edge(*dotNodes[i], *dotNodes[nodes[i].Parent])
+		if nodes[i].Parent() != ^uint64(0) && nodes[i].Parent() < uint64(len(dotNodes)) {
+			graph.Edge(*dotNodes[i], *dotNodes[nodes[i].Parent()])
 		}
 	}
 

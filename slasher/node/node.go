@@ -14,11 +14,13 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/prysmaticlabs/prysm/shared"
+	"github.com/prysmaticlabs/prysm/shared/backuputil"
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/prereq"
 	"github.com/prysmaticlabs/prysm/shared/prometheus"
 	"github.com/prysmaticlabs/prysm/shared/tracing"
 	"github.com/prysmaticlabs/prysm/shared/version"
@@ -64,6 +66,9 @@ func NewSlasherNode(cliCtx *cli.Context) (*SlasherNode, error) {
 		return nil, err
 	}
 
+	// Warn if user's platform is not supported
+	prereq.WarnIfNotSupported(cliCtx.Context)
+
 	if cliCtx.Bool(flags.EnableHistoricalDetectionFlag.Name) {
 		// Set the max RPC size to 4096 as configured by --historical-slasher-node for optimal historical detection.
 		cmdConfig := cmd.Get()
@@ -75,7 +80,7 @@ func NewSlasherNode(cliCtx *cli.Context) (*SlasherNode, error) {
 	cmd.ConfigureSlasher(cliCtx)
 	registry := shared.NewServiceRegistry()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(cliCtx.Context)
 	slasher := &SlasherNode{
 		cliCtx:                cliCtx,
 		ctx:                   ctx,
@@ -85,8 +90,11 @@ func NewSlasherNode(cliCtx *cli.Context) (*SlasherNode, error) {
 		services:              registry,
 		stop:                  make(chan struct{}),
 	}
-	if err := slasher.registerPrometheusService(); err != nil {
-		return nil, err
+
+	if !cliCtx.Bool(cmd.DisableMonitoringFlag.Name) {
+		if err := slasher.registerPrometheusService(cliCtx); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := slasher.startDB(); err != nil {
@@ -154,10 +162,21 @@ func (s *SlasherNode) Close() {
 	close(s.stop)
 }
 
-func (s *SlasherNode) registerPrometheusService() error {
-	service := prometheus.NewPrometheusService(
+func (s *SlasherNode) registerPrometheusService(cliCtx *cli.Context) error {
+	var additionalHandlers []prometheus.Handler
+	if cliCtx.IsSet(cmd.EnableBackupWebhookFlag.Name) {
+		additionalHandlers = append(
+			additionalHandlers,
+			prometheus.Handler{
+				Path:    "/db/backup",
+				Handler: backuputil.BackupHandler(s.db, cliCtx.String(cmd.BackupWebhookOutputDir.Name)),
+			},
+		)
+	}
+	service := prometheus.NewService(
 		fmt.Sprintf("%s:%d", s.cliCtx.String(cmd.MonitoringHostFlag.Name), s.cliCtx.Int(flags.MonitoringPortFlag.Name)),
 		s.services,
+		additionalHandlers...,
 	)
 	logrus.AddHook(prometheus.NewLogrusCollector())
 	return s.services.RegisterService(service)
@@ -168,7 +187,10 @@ func (s *SlasherNode) startDB() error {
 	clearDB := s.cliCtx.Bool(cmd.ClearDB.Name)
 	forceClearDB := s.cliCtx.Bool(cmd.ForceClearDB.Name)
 	dbPath := path.Join(baseDir, slasherDBName)
-	cfg := &kv.Config{}
+	spanCacheSize := s.cliCtx.Int(flags.SpanCacheSize.Name)
+	highestAttCacheSize := s.cliCtx.Int(flags.HighestAttCacheSize.Name)
+	cfg := &kv.Config{SpanCacheSize: spanCacheSize, HighestAttestationCacheSize: highestAttCacheSize}
+	log.Infof("Span cache size has been set to: %d", spanCacheSize)
 	d, err := db.NewDB(dbPath, cfg)
 	if err != nil {
 		return err
@@ -185,6 +207,9 @@ func (s *SlasherNode) startDB() error {
 	}
 	if clearDBConfirmed || forceClearDB {
 		log.Warning("Removing database")
+		if err := d.Close(); err != nil {
+			return errors.Wrap(err, "could not close db prior to clearing")
+		}
 		if err := d.ClearDB(); err != nil {
 			return err
 		}
@@ -205,7 +230,7 @@ func (s *SlasherNode) registerBeaconClientService() error {
 		beaconProvider = flags.BeaconRPCProviderFlag.Value
 	}
 
-	bs, err := beaconclient.NewBeaconClientService(s.ctx, &beaconclient.Config{
+	bs, err := beaconclient.NewService(s.ctx, &beaconclient.Config{
 		BeaconCert:            beaconCert,
 		SlasherDB:             s.db,
 		BeaconProvider:        beaconProvider,
@@ -223,7 +248,7 @@ func (s *SlasherNode) registerDetectionService() error {
 	if err := s.services.FetchService(&bs); err != nil {
 		panic(err)
 	}
-	ds := detection.NewDetectionService(s.ctx, &detection.Config{
+	ds := detection.NewService(s.ctx, &detection.Config{
 		Notifier:              bs,
 		SlasherDB:             s.db,
 		BeaconClient:          bs,

@@ -181,18 +181,18 @@ func TestFFGUpdates_TwoBranches(t *testing.T) {
 	assert.Equal(t, indexToHash(7), r, "Incorrect head with justified epoch at 0")
 }
 
-func setup(justifiedEpoch uint64, finalizedEpoch uint64) *ForkChoice {
+func setup(justifiedEpoch, finalizedEpoch uint64) *ForkChoice {
 	f := New(0, 0, params.BeaconConfig().ZeroHash)
-	f.store.NodeIndices[params.BeaconConfig().ZeroHash] = 0
-	f.store.Nodes = append(f.store.Nodes, &Node{
-		Slot:           0,
-		Root:           params.BeaconConfig().ZeroHash,
-		Parent:         NonExistentNode,
-		JustifiedEpoch: justifiedEpoch,
-		FinalizedEpoch: finalizedEpoch,
-		BestChild:      NonExistentNode,
-		BestDescendant: NonExistentNode,
-		Weight:         0,
+	f.store.nodesIndices[params.BeaconConfig().ZeroHash] = 0
+	f.store.nodes = append(f.store.nodes, &Node{
+		slot:           0,
+		root:           params.BeaconConfig().ZeroHash,
+		parent:         NonExistentNode,
+		justifiedEpoch: justifiedEpoch,
+		finalizedEpoch: finalizedEpoch,
+		bestChild:      NonExistentNode,
+		bestDescendant: NonExistentNode,
+		weight:         0,
 	})
 
 	return f

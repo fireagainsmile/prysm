@@ -10,10 +10,9 @@ go_library(
         "mainnet_config.go",
         "minimal_config.go",
         "network_config.go",
-        "testnet_altona_config.go",
         "testnet_e2e_config.go",
-        "testnet_medalla_config.go",
-        "testnet_onyx_config.go",
+        "testnet_pyrmont_config.go",
+        "testnet_toledo_config.go",
         "testutils.go",
     ],
     importpath = "github.com/prysmaticlabs/prysm/shared/params",
@@ -38,5 +37,8 @@ go_test(
         "@eth2_spec_tests_minimal//:test_data",
     ],
     embed = [":go_default_library"],
-    deps = ["@io_bazel_rules_go//go/tools/bazel:go_default_library"],
+    deps = [
+        "//shared/testutil/require:go_default_library",
+        "@io_bazel_rules_go//go/tools/bazel:go_default_library",
+    ],
 )

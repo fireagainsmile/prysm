@@ -85,15 +85,6 @@ func ToBytes4(x []byte) [4]byte {
 	return y
 }
 
-// ToBytes8 is a convenience method for converting a byte slice to a fix
-// sized 8 byte array. This method will truncate the input if it is larger
-// than 8 bytes.
-func ToBytes8(x []byte) [8]byte {
-	var y [8]byte
-	copy(y[:], x)
-	return y
-}
-
 // ToBytes32 is a convenience method for converting a byte slice to a fix
 // sized 32 byte array. This method will truncate the input if it is larger
 // than 32 bytes.
@@ -264,7 +255,7 @@ func MakeEmptyBitlists(i int) []byte {
 // HighestBitIndex returns the index of the highest
 // bit set from bitlist `b`.
 func HighestBitIndex(b []byte) (int, error) {
-	if b == nil || len(b) == 0 {
+	if len(b) == 0 {
 		return 0, errors.New("input list can't be empty or nil")
 	}
 

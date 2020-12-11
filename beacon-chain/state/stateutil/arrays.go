@@ -70,7 +70,7 @@ func (h *stateRootHasher) arraysRoot(input [][]byte, length uint64, fieldName st
 			changedIndices = append(changedIndices, maxChangedIndex+1)
 		}
 		for i := 0; i < len(changedIndices); i++ {
-			rt, err = recomputeRoot(changedIndices[i], chunks, length, fieldName, hashFunc)
+			rt, err = recomputeRoot(changedIndices[i], chunks, fieldName, hashFunc)
 			if err != nil {
 				return [32]byte{}, err
 			}
@@ -79,8 +79,7 @@ func (h *stateRootHasher) arraysRoot(input [][]byte, length uint64, fieldName st
 		return rt, nil
 	}
 
-	var res [32]byte
-	res = h.merkleizeWithCache(leaves, length, fieldName, hashFunc)
+	res := h.merkleizeWithCache(leaves, length, fieldName, hashFunc)
 	if h.rootsCache != nil {
 		leavesCache[fieldName] = leaves
 	}
@@ -90,9 +89,7 @@ func (h *stateRootHasher) arraysRoot(input [][]byte, length uint64, fieldName st
 func (h *stateRootHasher) merkleizeWithCache(leaves [][32]byte, length uint64,
 	fieldName string, hasher func([]byte) [32]byte) [32]byte {
 	if len(leaves) == 1 {
-		var root [32]byte
-		root = leaves[0]
-		return root
+		return leaves[0]
 	}
 	hashLayer := leaves
 	layers := make([][][32]byte, htrutils.GetDepth(length)+1)
@@ -103,8 +100,7 @@ func (h *stateRootHasher) merkleizeWithCache(leaves [][32]byte, length uint64,
 	}
 	layers[0] = hashLayer
 	layers, hashLayer = merkleizeTrieLeaves(layers, hashLayer, hasher)
-	var root [32]byte
-	root = hashLayer[0]
+	root := hashLayer[0]
 	if h.rootsCache != nil {
 		layersCache[fieldName] = layers
 	}
@@ -122,7 +118,7 @@ func merkleizeTrieLeaves(layers [][][32]byte, hashLayer [][32]byte,
 	chunkBuffer := bytes.NewBuffer([]byte{})
 	chunkBuffer.Grow(64)
 	for len(hashLayer) > 1 && i < len(layers) {
-		layer := make([][32]byte, len(hashLayer)/2, len(hashLayer)/2)
+		layer := make([][32]byte, len(hashLayer)/2)
 		for j := 0; j < len(hashLayer); j += 2 {
 			chunkBuffer.Write(hashLayer[j][:])
 			chunkBuffer.Write(hashLayer[j+1][:])
@@ -137,8 +133,7 @@ func merkleizeTrieLeaves(layers [][][32]byte, hashLayer [][32]byte,
 	return layers, hashLayer
 }
 
-func recomputeRoot(idx int, chunks [][32]byte, length uint64,
-	fieldName string, hasher func([]byte) [32]byte) ([32]byte, error) {
+func recomputeRoot(idx int, chunks [][32]byte, fieldName string, hasher func([]byte) [32]byte) ([32]byte, error) {
 	items, ok := layersCache[fieldName]
 	if !ok {
 		return [32]byte{}, errors.New("could not recompute root as there was no cache found")

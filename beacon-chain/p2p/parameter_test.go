@@ -1,19 +1,17 @@
 package p2p
 
 import (
-	"math"
 	"testing"
 	"time"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 )
 
 const (
 	// overlay parameters
-	gossipSubD   = 6  // topic stable mesh target count
-	gossipSubDlo = 5  // topic stable mesh low watermark
+	gossipSubD   = 8  // topic stable mesh target count
+	gossipSubDlo = 6  // topic stable mesh low watermark
 	gossipSubDhi = 12 // topic stable mesh high watermark
 
 	// gossip parameters
@@ -42,10 +40,7 @@ func TestGossipParameters(t *testing.T) {
 	setPubSubParameters()
 	assert.Equal(t, gossipSubMcacheLen, pubsub.GossipSubHistoryLength, "gossipSubMcacheLen")
 	assert.Equal(t, gossipSubMcacheGossip, pubsub.GossipSubHistoryGossip, "gossipSubMcacheGossip")
-	val := (params.BeaconConfig().SlotsPerEpoch * params.BeaconConfig().SecondsPerSlot * 1000) /
-		uint64(pubsub.GossipSubHeartbeatInterval.Milliseconds())
-	roundedUp := math.Round(float64(val) / 10)
-	assert.Equal(t, gossipSubSeenTTL, int(roundedUp)*10, "gossipSubSeenTtl")
+	assert.Equal(t, gossipSubSeenTTL, int(pubsub.TimeCacheDuration.Milliseconds()/pubsub.GossipSubHeartbeatInterval.Milliseconds()), "gossipSubSeenTtl")
 }
 
 func TestFanoutParameters(t *testing.T) {

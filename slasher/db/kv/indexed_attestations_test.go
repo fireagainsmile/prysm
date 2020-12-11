@@ -2,12 +2,10 @@ package kv
 
 import (
 	"context"
-	"flag"
-	"reflect"
 	"testing"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/urfave/cli/v2"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 type testStruct struct {
@@ -22,8 +20,8 @@ func init() {
 			idxAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 0},
-					Target: &ethpb.Checkpoint{Epoch: 1},
+					Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+					Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 				},
 				Signature: []byte{1, 2},
 			},
@@ -32,8 +30,8 @@ func init() {
 			idxAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{1, 2},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 0},
-					Target: &ethpb.Checkpoint{Epoch: 2},
+					Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+					Target: &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 				},
 				Signature: []byte{3, 4},
 			},
@@ -42,8 +40,8 @@ func init() {
 			idxAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 1},
-					Target: &ethpb.Checkpoint{Epoch: 2},
+					Source: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+					Target: &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 				},
 				Signature: []byte{5, 6},
 			},
@@ -52,8 +50,8 @@ func init() {
 			idxAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 1},
-					Target: &ethpb.Checkpoint{Epoch: 3},
+					Source: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+					Target: &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 				},
 				Signature: []byte{5, 6},
 			},
@@ -62,39 +60,24 @@ func init() {
 }
 
 func TestHasIndexedAttestation_NilDB(t *testing.T) {
-	app := cli.App{}
-	set := flag.NewFlagSet("test", 0)
-	db := setupDB(t, cli.NewContext(&app, set, nil))
+	db := setupDB(t)
 	ctx := context.Background()
 
 	hasIdxAtt, err := db.HasIndexedAttestation(ctx, tests[0].idxAtt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hasIdxAtt {
-		t.Fatal("HasIndexedAttestation should return false")
-	}
+	require.NoError(t, err)
+	require.Equal(t, false, hasIdxAtt)
 }
 
 func TestSaveIndexedAttestation(t *testing.T) {
-	app := &cli.App{}
-	set := flag.NewFlagSet("test", 0)
-	db := setupDB(t, cli.NewContext(app, set, nil))
+	db := setupDB(t)
 	ctx := context.Background()
 
 	for _, tt := range tests {
-		if err := db.SaveIndexedAttestation(ctx, tt.idxAtt); err != nil {
-			t.Fatalf("save indexed attestation failed: %v", err)
-		}
+		require.NoError(t, db.SaveIndexedAttestation(ctx, tt.idxAtt), "Save indexed attestation failed")
 
 		exists, err := db.HasIndexedAttestation(ctx, tt.idxAtt)
-		if err != nil {
-			t.Fatalf("failed to get indexed attestation: %v", err)
-		}
-
-		if !exists {
-			t.Fatal("Expected to find saved attestation in DB")
-		}
+		require.NoError(t, err, "Failed to get indexed attestation")
+		require.Equal(t, true, exists, "Expected to find saved attestation in DB")
 	}
 }
 
@@ -113,8 +96,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
@@ -125,8 +108,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
@@ -138,8 +121,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{1, 2, 3},
@@ -147,8 +130,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 2, 4},
@@ -156,8 +139,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 3"),
 					},
 					Signature: []byte{1, 2, 5},
@@ -169,8 +152,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{1, 2, 3},
@@ -178,8 +161,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 2, 4},
@@ -187,8 +170,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 3"),
 					},
 					Signature: []byte{1, 2, 5},
@@ -201,8 +184,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{1, 2, 3},
@@ -210,8 +193,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{1, 2, 4},
@@ -219,8 +202,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 3"),
 					},
 					Signature: []byte{1, 2, 5},
@@ -228,8 +211,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 3, 1},
@@ -237,8 +220,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{0, 2, 4},
@@ -246,8 +229,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{4},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 2, 9},
@@ -259,8 +242,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{1, 2, 4},
@@ -268,8 +251,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{4},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 2, 9},
@@ -282,8 +265,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{3, 5, 3},
@@ -291,8 +274,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{3, 5, 3},
@@ -300,8 +283,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 2, 4},
@@ -309,8 +292,8 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 3"),
 					},
 					Signature: []byte{1, 2, 5},
@@ -322,32 +305,19 @@ func TestIndexedAttestationsWithPrefix(t *testing.T) {
 	}
 	for _, tt := range prefixTests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := cli.App{}
-			set := flag.NewFlagSet("test", 0)
-			db := setupDB(t, cli.NewContext(&app, set, nil))
+			db := setupDB(t)
 			ctx := context.Background()
 
-			if err := db.SaveIndexedAttestations(ctx, tt.attsInDB); err != nil {
-				t.Fatalf("save indexed attestation failed: %v", err)
-			}
+			require.NoError(t, db.SaveIndexedAttestations(ctx, tt.attsInDB), "Save indexed attestation failed")
 			for _, att := range tt.attsInDB {
 				found, err := db.HasIndexedAttestation(ctx, att)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !found {
-					t.Fatalf("Expected to save %v", att)
-				}
+				require.NoError(t, err)
+				require.Equal(t, true, found, "Expected to save %v", att)
 			}
 
 			idxAtts, err := db.IndexedAttestationsWithPrefix(ctx, tt.targetEpoch, tt.searchPrefix)
-			if err != nil {
-				t.Fatalf("failed to get indexed attestation: %v", err)
-			}
-
-			if !reflect.DeepEqual(tt.expectedResult, idxAtts) {
-				t.Fatalf("Expected %v, received: %v", tt.expectedResult, idxAtts)
-			}
+			require.NoError(t, err, "Failed to get indexed attestation")
+			require.DeepEqual(t, tt.expectedResult, idxAtts)
 		})
 	}
 }
@@ -366,8 +336,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
@@ -377,8 +347,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
@@ -390,8 +360,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{1, 2, 3},
@@ -399,8 +369,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 5, 4},
@@ -408,8 +378,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 3"),
 					},
 					Signature: []byte{8, 2, 5},
@@ -420,8 +390,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{1, 2, 3},
@@ -429,8 +399,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 5, 4},
@@ -438,8 +408,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 3"),
 					},
 					Signature: []byte{8, 2, 5},
@@ -452,8 +422,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 1},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{3, 5, 3},
@@ -461,8 +431,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there"),
 					},
 					Signature: []byte{3, 5, 3},
@@ -470,8 +440,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 3},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 2"),
 					},
 					Signature: []byte{1, 2, 4},
@@ -479,8 +449,8 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 5},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 5, Root: make([]byte, 32)},
 						BeaconBlockRoot: []byte("hi there 3"),
 					},
 					Signature: []byte{1, 2, 5},
@@ -491,32 +461,19 @@ func TestIndexedAttestationsForTarget(t *testing.T) {
 	}
 	for _, tt := range prefixTests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := cli.App{}
-			set := flag.NewFlagSet("test", 0)
-			db := setupDB(t, cli.NewContext(&app, set, nil))
+			db := setupDB(t)
 			ctx := context.Background()
 
-			if err := db.SaveIndexedAttestations(ctx, tt.attsInDB); err != nil {
-				t.Fatalf("save indexed attestation failed: %v", err)
-			}
+			require.NoError(t, db.SaveIndexedAttestations(ctx, tt.attsInDB), "Save indexed attestation failed")
 			for _, att := range tt.attsInDB {
 				found, err := db.HasIndexedAttestation(ctx, att)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !found {
-					t.Fatalf("Expected to save %v", att)
-				}
+				require.NoError(t, err)
+				require.Equal(t, true, found, "Expected to save %v", att)
 			}
 
 			idxAtts, err := db.IndexedAttestationsForTarget(ctx, tt.targetEpoch)
-			if err != nil {
-				t.Fatalf("failed to get indexed attestation: %v", err)
-			}
-
-			if !reflect.DeepEqual(tt.expectedResult, idxAtts) {
-				t.Fatalf("Expected %v, received: %v", tt.expectedResult, idxAtts)
-			}
+			require.NoError(t, err, "Failed to get indexed attestation: %v", err)
+			require.DeepEqual(t, tt.expectedResult, idxAtts)
 		})
 	}
 }
@@ -535,8 +492,8 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
@@ -545,8 +502,8 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
@@ -559,24 +516,24 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 3},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
 					},
 					Signature: []byte{2, 4},
 				},
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 4},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
 					},
 					Signature: []byte{3, 5},
 				},
@@ -585,16 +542,16 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2},
 				},
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 4},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
 					},
 					Signature: []byte{3, 5},
 				},
@@ -607,24 +564,24 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 2},
 				},
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 3},
 				},
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 4},
 				},
@@ -633,8 +590,8 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 3},
 				},
@@ -647,24 +604,24 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 2},
 				},
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 3},
 				},
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 4},
 				},
@@ -673,8 +630,8 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 				{
 					AttestingIndices: []uint64{3},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 0},
-						Target: &ethpb.Checkpoint{Epoch: 1},
+						Source: &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target: &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
 					},
 					Signature: []byte{1, 2, 6},
 				},
@@ -684,115 +641,72 @@ func TestDeleteIndexedAttestation(t *testing.T) {
 	}
 	for _, tt := range deleteTests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := &cli.App{}
-			set := flag.NewFlagSet("test", 0)
-			db := setupDB(t, cli.NewContext(app, set, nil))
+			db := setupDB(t)
 			ctx := context.Background()
 
-			if err := db.SaveIndexedAttestations(ctx, tt.attsInDB); err != nil {
-				t.Fatalf("save indexed attestation failed: %v", err)
-			}
+			require.NoError(t, db.SaveIndexedAttestations(ctx, tt.attsInDB), "Save indexed attestation failed")
 
 			for _, att := range tt.attsInDB {
 				found, err := db.HasIndexedAttestation(ctx, att)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !found {
-					t.Fatalf("Expected to save %v", att)
-				}
+				require.NoError(t, err)
+				require.Equal(t, true, found, "Expected to save %v", att)
 			}
 
 			for _, att := range tt.deleteAtts {
-				if err := db.DeleteIndexedAttestation(ctx, att); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, db.DeleteIndexedAttestation(ctx, att))
 			}
 
 			for i, att := range tt.attsInDB {
 				found, err := db.HasIndexedAttestation(ctx, att)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if found != tt.foundArray[i] {
-					t.Fatalf("Expected found to be %t: %v", tt.foundArray[i], att)
-				}
+				require.NoError(t, err)
+				require.Equal(t, tt.foundArray[i], found)
 			}
 		})
 	}
 }
 
 func TestHasIndexedAttestation(t *testing.T) {
-	app := cli.App{}
-	set := flag.NewFlagSet("test", 0)
-	db := setupDB(t, cli.NewContext(&app, set, nil))
+	db := setupDB(t)
 	ctx := context.Background()
 
 	for _, tt := range tests {
 		exists, err := db.HasIndexedAttestation(ctx, tt.idxAtt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if exists {
-			t.Fatal("has indexed attestation should return false for indexed attestations that are not in db")
-		}
+		require.NoError(t, err)
+		require.Equal(t, false, exists, "Has indexed attestation should return false for indexed attestations that are not in db")
 
-		if err := db.SaveIndexedAttestation(ctx, tt.idxAtt); err != nil {
-			t.Fatalf("save indexed attestation failed: %v", err)
-		}
+		require.NoError(t, db.SaveIndexedAttestation(ctx, tt.idxAtt), "Save indexed attestation failed")
 	}
 
 	for _, tt := range tests {
 		exists, err := db.HasIndexedAttestation(ctx, tt.idxAtt)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !exists {
-			t.Fatal("has indexed attestation should return true")
-		}
+		require.NoError(t, err)
+		require.Equal(t, true, exists)
 	}
 }
 
 func TestPruneHistoryIndexedAttestation(t *testing.T) {
-	app := cli.App{}
-	set := flag.NewFlagSet("test", 0)
-	db := setupDB(t, cli.NewContext(&app, set, nil))
+	db := setupDB(t)
 	ctx := context.Background()
 
 	for _, tt := range tests {
-		if err := db.SaveIndexedAttestation(ctx, tt.idxAtt); err != nil {
-			t.Fatalf("save indexed attestation failed: %v", err)
-		}
+		require.NoError(t, db.SaveIndexedAttestation(ctx, tt.idxAtt), "Save indexed attestation failed")
 
 		found, err := db.HasIndexedAttestation(ctx, tt.idxAtt)
-		if err != nil {
-			t.Fatalf("failed to get indexed attestation: %v", err)
-		}
-
-		if !found {
-			t.Fatal("Expected to find attestation in DB")
-		}
+		require.NoError(t, err, "Failed to get indexed attestation")
+		require.Equal(t, true, found, "Expected to find attestation in DB")
 	}
 	currentEpoch := uint64(2)
 	historyToKeep := uint64(1)
-	if err := db.PruneAttHistory(ctx, currentEpoch, historyToKeep); err != nil {
-		t.Fatalf("failed to prune: %v", err)
-	}
+	require.NoError(t, db.PruneAttHistory(ctx, currentEpoch, historyToKeep), "Failed to prune")
 
 	for _, tt := range tests {
 		exists, err := db.HasIndexedAttestation(ctx, tt.idxAtt)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 
 		if tt.idxAtt.Data.Target.Epoch > currentEpoch-historyToKeep {
-			if !exists {
-				t.Fatal("Expected to find attestation newer than prune age in DB")
-			}
+			require.Equal(t, true, exists, "Expected to find attestation newer than prune age in DB")
 		} else {
-			if exists {
-				t.Fatal("Expected to not find attestation older than prune age in DB")
-			}
+			require.Equal(t, false, exists, "Expected to not find attestation older than prune age in DB")
 		}
 	}
 }

@@ -6,7 +6,11 @@ import (
 	"testing"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
+	slashpb "github.com/prysmaticlabs/prysm/proto/slashing"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	testDB "github.com/prysmaticlabs/prysm/slasher/db/testing"
 	status "github.com/prysmaticlabs/prysm/slasher/db/types"
 	"github.com/prysmaticlabs/prysm/slasher/detection/attestations"
@@ -29,8 +33,9 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 				{
 					AttestingIndices: []uint64{3},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 9},
-						Target: &ethpb.Checkpoint{Epoch: 13},
+						Source:          &ethpb.Checkpoint{Epoch: 9, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 13, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 				},
@@ -38,9 +43,11 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{1, 3, 7},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 7},
-					Target: &ethpb.Checkpoint{Epoch: 14},
+					Source:          &ethpb.Checkpoint{Epoch: 7, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 14, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
 				},
+				Signature: make([]byte, 96),
 			},
 			slashingsFound: 1,
 		},
@@ -50,8 +57,9 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0, 2, 4, 8},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 6},
-						Target: &ethpb.Checkpoint{Epoch: 10},
+						Source:          &ethpb.Checkpoint{Epoch: 6, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 10, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 				},
@@ -59,9 +67,11 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0, 4},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 7},
-					Target: &ethpb.Checkpoint{Epoch: 9},
+					Source:          &ethpb.Checkpoint{Epoch: 7, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 9, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
 				},
+				Signature: make([]byte, 96),
 			},
 			slashingsFound: 1,
 		},
@@ -71,16 +81,18 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0, 2},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 4},
-						Target: &ethpb.Checkpoint{Epoch: 5},
+						Source:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 5, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 				},
 				{
 					AttestingIndices: []uint64{4, 8},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 3},
-						Target: &ethpb.Checkpoint{Epoch: 4},
+						Source:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 3}, 96),
 				},
@@ -88,9 +100,11 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0, 4},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 2},
-					Target: &ethpb.Checkpoint{Epoch: 7},
+					Source:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 7, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
 				},
+				Signature: make([]byte, 96),
 			},
 			slashingsFound: 2,
 		},
@@ -100,16 +114,18 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0, 2},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 4},
-						Target: &ethpb.Checkpoint{Epoch: 10},
+						Source:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 10, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 				},
 				{
 					AttestingIndices: []uint64{4, 8},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 5},
-						Target: &ethpb.Checkpoint{Epoch: 9},
+						Source:          &ethpb.Checkpoint{Epoch: 5, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 9, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 3}, 96),
 				},
@@ -117,9 +133,11 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0, 4},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 7},
-					Target: &ethpb.Checkpoint{Epoch: 8},
+					Source:          &ethpb.Checkpoint{Epoch: 7, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 8, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
 				},
+				Signature: make([]byte, 96),
 			},
 			slashingsFound: 2,
 		},
@@ -129,8 +147,9 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 1},
-						Target: &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 				},
@@ -138,9 +157,11 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 0},
-					Target: &ethpb.Checkpoint{Epoch: 1},
+					Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
 				},
+				Signature: make([]byte, 96),
 			},
 			slashingsFound: 0,
 		},
@@ -154,26 +175,17 @@ func TestDetect_detectAttesterSlashings_Surround(t *testing.T) {
 				slasherDB:          db,
 				minMaxSpanDetector: attestations.NewSpanDetector(db),
 			}
-			if err := db.SaveIndexedAttestations(ctx, tt.savedAtts); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, db.SaveIndexedAttestations(ctx, tt.savedAtts))
 			for _, att := range tt.savedAtts {
-				if err := ds.minMaxSpanDetector.UpdateSpans(ctx, att); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, ds.minMaxSpanDetector.UpdateSpans(ctx, att))
 			}
 
 			slashings, err := ds.DetectAttesterSlashings(ctx, tt.incomingAtt)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(slashings) != tt.slashingsFound {
-				t.Fatalf("Unexpected amount of slashings found, received %d, expected %d", len(slashings), tt.slashingsFound)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.slashingsFound, len(slashings), "Unexpected amount of slashings found")
 			attsl, err := db.AttesterSlashings(ctx, status.Active)
-			if len(attsl) != tt.slashingsFound {
-				t.Fatalf("Didnt save slashing to db")
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.slashingsFound, len(attsl), "Didnt save slashing to db")
 			for _, ss := range slashings {
 				slashingAtt1 := ss.Attestation_1
 				slashingAtt2 := ss.Attestation_2
@@ -205,8 +217,9 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 				{
 					AttestingIndices: []uint64{3},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 3},
-						Target: &ethpb.Checkpoint{Epoch: 4},
+						Source:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 				},
@@ -214,8 +227,9 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{1, 3, 7},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 2},
-					Target: &ethpb.Checkpoint{Epoch: 4},
+					Source:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
 				},
 				Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 			},
@@ -227,16 +241,18 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 				{
 					AttestingIndices: []uint64{1},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 3},
-						Target: &ethpb.Checkpoint{Epoch: 4},
+						Source:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
 				},
 				{
 					AttestingIndices: []uint64{3},
 					Data: &ethpb.AttestationData{
-						Source: &ethpb.Checkpoint{Epoch: 1},
-						Target: &ethpb.Checkpoint{Epoch: 4},
+						Source:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+						BeaconBlockRoot: make([]byte, 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 3}, 96),
 				},
@@ -244,8 +260,9 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{1, 3, 7},
 				Data: &ethpb.AttestationData{
-					Source: &ethpb.Checkpoint{Epoch: 2},
-					Target: &ethpb.Checkpoint{Epoch: 4},
+					Source:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
 				},
 				Signature: bytesutil.PadTo([]byte{1, 4}, 96),
 			},
@@ -257,8 +274,8 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0, 2, 4, 8},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 2},
-						Target:          &ethpb.Checkpoint{Epoch: 4},
+						Source:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
 						BeaconBlockRoot: bytesutil.PadTo([]byte("good block root"), 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
@@ -267,10 +284,11 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0, 4},
 				Data: &ethpb.AttestationData{
-					Source:          &ethpb.Checkpoint{Epoch: 2},
-					Target:          &ethpb.Checkpoint{Epoch: 4},
+					Source:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
 					BeaconBlockRoot: bytesutil.PadTo([]byte("bad block root"), 32),
 				},
+				Signature: make([]byte, 96),
 			},
 			slashingsFound: 1,
 		},
@@ -280,8 +298,8 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 				{
 					AttestingIndices: []uint64{0},
 					Data: &ethpb.AttestationData{
-						Source:          &ethpb.Checkpoint{Epoch: 0},
-						Target:          &ethpb.Checkpoint{Epoch: 2},
+						Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+						Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 						BeaconBlockRoot: bytesutil.PadTo([]byte("good block root"), 32),
 					},
 					Signature: bytesutil.PadTo([]byte{1, 2}, 96),
@@ -290,10 +308,11 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 			incomingAtt: &ethpb.IndexedAttestation{
 				AttestingIndices: []uint64{0},
 				Data: &ethpb.AttestationData{
-					Source:          &ethpb.Checkpoint{Epoch: 0},
-					Target:          &ethpb.Checkpoint{Epoch: 2},
+					Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
 					BeaconBlockRoot: bytesutil.PadTo([]byte("good block root"), 32),
 				},
+				Signature: make([]byte, 96),
 			},
 			slashingsFound: 0,
 		},
@@ -307,26 +326,17 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 				slasherDB:          db,
 				minMaxSpanDetector: attestations.NewSpanDetector(db),
 			}
-			if err := db.SaveIndexedAttestations(ctx, tt.savedAtts); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, db.SaveIndexedAttestations(ctx, tt.savedAtts))
 			for _, att := range tt.savedAtts {
-				if err := ds.minMaxSpanDetector.UpdateSpans(ctx, att); err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, ds.minMaxSpanDetector.UpdateSpans(ctx, att))
 			}
 
 			slashings, err := ds.DetectAttesterSlashings(ctx, tt.incomingAtt)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(slashings) != tt.slashingsFound {
-				t.Fatalf("Unexpected amount of slashings found, received %d, expected %d", len(slashings), tt.slashingsFound)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.slashingsFound, len(slashings), "Unexpected amount of slashings found")
 			savedSlashings, err := db.AttesterSlashings(ctx, status.Active)
-			if len(savedSlashings) != tt.slashingsFound {
-				t.Fatalf("Did not save slashing to db")
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.slashingsFound, len(savedSlashings), "Did not save slashing to db")
 
 			for _, ss := range slashings {
 				slashingAtt1 := ss.Attestation_1
@@ -339,7 +349,146 @@ func TestDetect_detectAttesterSlashings_Double(t *testing.T) {
 					)
 				}
 			}
+		})
+	}
+}
 
+func TestDetect_updateHighestAttestation(t *testing.T) {
+	tests := []struct {
+		name         string
+		savedHighest *slashpb.HighestAttestation
+		incomingAtt  *ethpb.IndexedAttestation
+		expected     *slashpb.HighestAttestation
+	}{
+		{
+			name: "update only target to higher",
+			savedHighest: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 1,
+				HighestTargetEpoch: 2,
+			},
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{1, 3, 7},
+				Data: &ethpb.AttestationData{
+					Source:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
+				},
+				Signature: bytesutil.PadTo([]byte{1, 2}, 96),
+			},
+			expected: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 1,
+				HighestTargetEpoch: 4,
+			},
+		},
+		{
+			name: "update target and source to higher",
+			savedHighest: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 1,
+				HighestTargetEpoch: 2,
+			},
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{1, 3, 7},
+				Data: &ethpb.AttestationData{
+					Source:          &ethpb.Checkpoint{Epoch: 3, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
+				},
+				Signature: bytesutil.PadTo([]byte{1, 2}, 96),
+			},
+			expected: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 3,
+				HighestTargetEpoch: 4,
+			},
+		},
+		{
+			name: "no update",
+			savedHighest: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 1,
+				HighestTargetEpoch: 2,
+			},
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{1, 3, 7},
+				Data: &ethpb.AttestationData{
+					Source:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 2, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
+				},
+				Signature: bytesutil.PadTo([]byte{1, 2}, 96),
+			},
+			expected: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 1,
+				HighestTargetEpoch: 2,
+			},
+		},
+		{
+			name: "update target to higher when source is lower(should be a slashable attestation)",
+			savedHighest: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 5,
+				HighestTargetEpoch: 6,
+			},
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{1, 3, 7},
+				Data: &ethpb.AttestationData{
+					Source:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 8, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
+				},
+				Signature: bytesutil.PadTo([]byte{1, 2}, 96),
+			},
+			expected: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 5,
+				HighestTargetEpoch: 8,
+			},
+		},
+		{
+			name: "update source to higher when target is same",
+			savedHighest: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 3,
+				HighestTargetEpoch: 6,
+			},
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{1, 3, 7},
+				Data: &ethpb.AttestationData{
+					Source:          &ethpb.Checkpoint{Epoch: 4, Root: make([]byte, 32)},
+					Target:          &ethpb.Checkpoint{Epoch: 6, Root: make([]byte, 32)},
+					BeaconBlockRoot: make([]byte, 32),
+				},
+				Signature: bytesutil.PadTo([]byte{1, 2}, 96),
+			},
+			expected: &slashpb.HighestAttestation{
+				ValidatorId:        1,
+				HighestSourceEpoch: 4,
+				HighestTargetEpoch: 6,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := testDB.SetupSlasherDB(t, false)
+			ctx := context.Background()
+			ds := Service{
+				ctx:               ctx,
+				slasherDB:         db,
+				proposalsDetector: proposals.NewProposeDetector(db),
+			}
+			require.NoError(t, db.SaveHighestAttestation(ctx, tt.savedHighest))
+
+			// Update and assert.
+			require.NoError(t, ds.UpdateHighestAttestation(ctx, tt.incomingAtt))
+			h, err := db.HighestAttestation(ctx, tt.savedHighest.ValidatorId)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected.HighestSourceEpoch, h.HighestSourceEpoch)
+			assert.Equal(t, tt.expected.HighestTargetEpoch, h.HighestTargetEpoch)
 		})
 	}
 }
@@ -351,18 +500,16 @@ func TestDetect_detectProposerSlashing(t *testing.T) {
 		incomingBlk *ethpb.SignedBeaconBlockHeader
 		slashing    *ethpb.ProposerSlashing
 	}
-	sigBlk1slot0, err := testDetect.SignedBlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sigBlk2slot0, err := testDetect.SignedBlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sigBlk1epoch1, err := testDetect.SignedBlockHeader(testDetect.StartSlot(1), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s0, err := helpers.StartSlot(0)
+	require.NoError(t, err)
+	sigBlk1slot0, err := testDetect.SignedBlockHeader(s0, 0)
+	require.NoError(t, err)
+	sigBlk2slot0, err := testDetect.SignedBlockHeader(s0, 0)
+	require.NoError(t, err)
+	s1, err := helpers.StartSlot(1)
+	require.NoError(t, err)
+	sigBlk1epoch1, err := testDetect.SignedBlockHeader(s1, 0)
+	require.NoError(t, err)
 	tests := []testStruct{
 		{
 			name:        "same block sig dont slash",
@@ -392,20 +539,15 @@ func TestDetect_detectProposerSlashing(t *testing.T) {
 				slasherDB:         db,
 				proposalsDetector: proposals.NewProposeDetector(db),
 			}
-			if err := db.SaveBlockHeader(ctx, tt.blk); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, db.SaveBlockHeader(ctx, tt.blk))
 
 			slashing, err := ds.proposalsDetector.DetectDoublePropose(ctx, tt.incomingBlk)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !reflect.DeepEqual(slashing, tt.slashing) {
-				t.Errorf("Wanted: %v, received %v", tt.slashing, slashing)
-			}
+			require.NoError(t, err)
+			assert.DeepEqual(t, tt.slashing, slashing)
 			savedSlashings, err := db.ProposalSlashingsByStatus(ctx, status.Active)
-			if tt.slashing != nil && len(savedSlashings) != 1 {
-				t.Fatalf("Did not save slashing to db")
+			require.NoError(t, err)
+			if tt.slashing != nil {
+				require.Equal(t, 1, len(savedSlashings), "Did not save slashing to db")
 			}
 
 			if slashing != nil && !isDoublePropose(slashing.Header_1, slashing.Header_2) {
@@ -415,7 +557,6 @@ func TestDetect_detectProposerSlashing(t *testing.T) {
 					slashing.Header_2,
 				)
 			}
-
 		})
 	}
 }
@@ -426,29 +567,21 @@ func TestDetect_detectProposerSlashingNoUpdate(t *testing.T) {
 		noUpdtaeBlk *ethpb.BeaconBlockHeader
 		slashable   bool
 	}
-	sigBlk1slot0, err := testDetect.SignedBlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blk1slot0, err := testDetect.BlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blk2slot0, err := testDetect.BlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s0, err := helpers.StartSlot(0)
+	require.NoError(t, err)
+	sigBlk1slot0, err := testDetect.SignedBlockHeader(s0, 0)
+	require.NoError(t, err)
+	blk1slot0, err := testDetect.BlockHeader(s0, 0)
+	require.NoError(t, err)
+	blk2slot0, err := testDetect.BlockHeader(s0, 0)
+	require.NoError(t, err)
 	diffRoot := [32]byte{1, 1, 1}
 	blk2slot0.ParentRoot = diffRoot[:]
-	blk3slot0, err := testDetect.BlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	blk3slot0, err := testDetect.BlockHeader(s0, 0)
+	require.NoError(t, err)
 	blk3slot0.StateRoot = diffRoot[:]
-	blk4slot0, err := testDetect.BlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	blk4slot0, err := testDetect.BlockHeader(s0, 0)
+	require.NoError(t, err)
 	blk4slot0.BodyRoot = diffRoot[:]
 	tests := []testStruct{
 		{
@@ -485,17 +618,11 @@ func TestDetect_detectProposerSlashingNoUpdate(t *testing.T) {
 				slasherDB:         db,
 				proposalsDetector: proposals.NewProposeDetector(db),
 			}
-			if err := db.SaveBlockHeader(ctx, tt.blk); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, db.SaveBlockHeader(ctx, tt.blk))
 
 			slashble, err := ds.proposalsDetector.DetectDoubleProposeNoUpdate(ctx, tt.noUpdtaeBlk)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if slashble != tt.slashable {
-				t.Errorf("Wanted slashbale: %v, received slashable: %v", tt.slashable, slashble)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.slashable, slashble)
 		})
 	}
 }
@@ -574,15 +701,11 @@ func TestServer_MapResultsToAtts(t *testing.T) {
 		},
 	}
 	for _, atts := range expectedResultsToAtts {
-		if err := ds.slasherDB.SaveIndexedAttestations(ctx, atts); err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, ds.slasherDB.SaveIndexedAttestations(ctx, atts))
 	}
 
 	resultsToAtts, err := ds.mapResultsToAtts(ctx, results)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	if !reflect.DeepEqual(expectedResultsToAtts, resultsToAtts) {
 		t.Error("Expected map:")
 		for key, value := range resultsToAtts {

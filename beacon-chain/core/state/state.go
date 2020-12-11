@@ -9,7 +9,6 @@ import (
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	b "github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
@@ -65,12 +64,12 @@ func GenesisBeaconState(deposits []*ethpb.Deposit, genesisTime uint64, eth1Data 
 		return nil, err
 	}
 	// Process initial deposits.
-	leaves := [][]byte{}
+	var leaves [][]byte
 	for _, deposit := range deposits {
 		if deposit == nil || deposit.Data == nil {
 			return nil, fmt.Errorf("nil deposit or deposit with nil data cannot be processed: %v", deposit)
 		}
-		hash, err := ssz.HashTreeRoot(deposit.Data)
+		hash, err := deposit.Data.HashTreeRoot()
 		if err != nil {
 			return nil, err
 		}
@@ -78,12 +77,12 @@ func GenesisBeaconState(deposits []*ethpb.Deposit, genesisTime uint64, eth1Data 
 	}
 	var trie *trieutil.SparseMerkleTrie
 	if len(leaves) > 0 {
-		trie, err = trieutil.GenerateTrieFromItems(leaves, int(params.BeaconConfig().DepositContractTreeDepth))
+		trie, err = trieutil.GenerateTrieFromItems(leaves, params.BeaconConfig().DepositContractTreeDepth)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		trie, err = trieutil.NewTrie(int(params.BeaconConfig().DepositContractTreeDepth))
+		trie, err = trieutil.NewTrie(params.BeaconConfig().DepositContractTreeDepth)
 		if err != nil {
 			return nil, err
 		}
@@ -96,7 +95,7 @@ func GenesisBeaconState(deposits []*ethpb.Deposit, genesisTime uint64, eth1Data 
 		return nil, err
 	}
 
-	state, err = b.ProcessPreGenesisDeposits(context.Background(), state, deposits)
+	state, err = b.ProcessPreGenesisDeposits(context.TODO(), state, deposits)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not process validator deposits")
 	}
@@ -189,7 +188,14 @@ func OptimizedGenesisBeaconState(genesisTime uint64, preState *stateTrie.BeaconS
 		Eth1DepositIndex: preState.Eth1DepositIndex(),
 	}
 
-	bodyRoot, err := stateutil.BlockBodyRoot(&ethpb.BeaconBlockBody{})
+	bodyRoot, err := (&ethpb.BeaconBlockBody{
+		RandaoReveal: make([]byte, 96),
+		Eth1Data: &ethpb.Eth1Data{
+			DepositRoot: make([]byte, 32),
+			BlockHash:   make([]byte, 32),
+		},
+		Graffiti: make([]byte, 32),
+	}).HashTreeRoot()
 	if err != nil {
 		return nil, errors.Wrap(err, "could not hash tree root empty block body")
 	}
@@ -243,7 +249,7 @@ func EmptyGenesisState() (*stateTrie.BeaconState, error) {
 //     return True
 // This method has been modified from the spec to allow whole states not to be saved
 // but instead only cache the relevant information.
-func IsValidGenesisState(chainStartDepositCount uint64, currentTime uint64) bool {
+func IsValidGenesisState(chainStartDepositCount, currentTime uint64) bool {
 	if currentTime < params.BeaconConfig().MinGenesisTime {
 		return false
 	}

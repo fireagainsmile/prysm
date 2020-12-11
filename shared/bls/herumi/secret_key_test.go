@@ -1,9 +1,10 @@
 package herumi_test
 
 import (
-	"bytes"
 	"errors"
 	"testing"
+
+	"github.com/prysmaticlabs/prysm/shared/bls/common"
 
 	"github.com/prysmaticlabs/prysm/shared/bls/herumi"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
@@ -12,7 +13,9 @@ import (
 )
 
 func TestMarshalUnmarshal(t *testing.T) {
-	b := herumi.RandKey().Marshal()
+	priv, err := herumi.RandKey()
+	require.NoError(t, err)
+	b := priv.Marshal()
 	b32 := bytesutil.ToBytes32(b)
 	pk, err := herumi.SecretKeyFromBytes(b32[:])
 	require.NoError(t, err)
@@ -49,7 +52,7 @@ func TestSecretKeyFromBytes(t *testing.T) {
 		{
 			name:  "Bad",
 			input: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
-			err:   errors.New("could not unmarshal bytes into secret key: err blsSecretKeyDeserialize ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+			err:   common.ErrSecretUnmarshal,
 		},
 		{
 			name:  "Good",
@@ -61,30 +64,20 @@ func TestSecretKeyFromBytes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			res, err := herumi.SecretKeyFromBytes(test.input)
 			if test.err != nil {
-				if err == nil {
-					t.Errorf("No error returned: expected %v", test.err)
-				} else if test.err.Error() != err.Error() {
-					t.Errorf("Unexpected error returned: expected %v, received %v", test.err, err)
-				}
+				assert.ErrorContains(t, test.err.Error(), err)
 			} else {
-				if err != nil {
-					t.Errorf("Unexpected error returned: %v", err)
-				} else {
-					if bytes.Compare(res.Marshal(), test.input) != 0 {
-						t.Errorf("Unexpected result: expected %x, received %x", test.input, res.Marshal())
-					}
-				}
+				assert.NoError(t, err)
+				assert.DeepEqual(t, test.input, res.Marshal())
 			}
-
 		})
 	}
 }
 
 func TestSerialize(t *testing.T) {
-	rk := herumi.RandKey()
+	rk, err := herumi.RandKey()
+	require.NoError(t, err)
 	b := rk.Marshal()
 
-	if _, err := herumi.SecretKeyFromBytes(b); err != nil {
-		t.Error(err)
-	}
+	_, err = herumi.SecretKeyFromBytes(b)
+	assert.NoError(t, err)
 }

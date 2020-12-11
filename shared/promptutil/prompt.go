@@ -2,24 +2,38 @@ package promptutil
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"os"
 	"strings"
 
 	"github.com/logrusorgru/aurora"
+	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/shared/fileutil"
+	log "github.com/sirupsen/logrus"
+	"github.com/urfave/cli/v2"
 	"golang.org/x/crypto/ssh/terminal"
 )
 
 var au = aurora.NewAurora(true)
 
-// ValidatePrompt requests the user for text and expects it to fulfil la provided validation function.
-func ValidatePrompt(promptText string, validateFunc func(string) error) (string, error) {
+// PasswordReaderFunc takes in a *file and returns a password using the terminal package
+func passwordReaderFunc(file *os.File) ([]byte, error) {
+	pass, err := terminal.ReadPassword(int(file.Fd()))
+	return pass, err
+}
+
+// PasswordReader has passwordReaderFunc as the default but can be changed for testing purposes.
+var PasswordReader = passwordReaderFunc
+
+// ValidatePrompt requests the user for text and expects the user to fulfill the provided validation function.
+func ValidatePrompt(r io.Reader, promptText string, validateFunc func(string) error) (string, error) {
 	var responseValid bool
 	var response string
 	for !responseValid {
 		fmt.Printf("%s:\n", au.Bold(promptText))
-		scanner := bufio.NewScanner(os.Stdin)
+		scanner := bufio.NewScanner(r)
 		if ok := scanner.Scan(); ok {
 			item := scanner.Text()
 			response = strings.TrimRight(item, "\r\n")
@@ -36,7 +50,7 @@ func ValidatePrompt(promptText string, validateFunc func(string) error) (string,
 }
 
 // DefaultPrompt prompts the user for any text and performs no validation. If nothing is entered it returns the default.
-func DefaultPrompt(promptText string, defaultValue string) (string, error) {
+func DefaultPrompt(promptText, defaultValue string) (string, error) {
 	var response string
 	if defaultValue != "" {
 		fmt.Printf("%s %s:\n", promptText, fmt.Sprintf("(%s: %s)", au.BrightGreen("default"), defaultValue))
@@ -57,7 +71,7 @@ func DefaultPrompt(promptText string, defaultValue string) (string, error) {
 
 // DefaultAndValidatePrompt prompts the user for any text and expects it to fulfill a validation function. If nothing is entered
 // the default value is returned.
-func DefaultAndValidatePrompt(promptText string, defaultValue string, validateFunc func(string) error) (string, error) {
+func DefaultAndValidatePrompt(promptText, defaultValue string, validateFunc func(string) error) (string, error) {
 	var responseValid bool
 	var response string
 	for !responseValid {
@@ -66,6 +80,9 @@ func DefaultAndValidatePrompt(promptText string, defaultValue string, validateFu
 		if ok := scanner.Scan(); ok {
 			item := scanner.Text()
 			response = strings.TrimRight(item, "\r\n")
+			if response == "" {
+				return defaultValue, nil
+			}
 			if err := validateFunc(response); err != nil {
 				fmt.Printf("Entry not valid: %s\n", au.BrightRed(err))
 			} else {
@@ -84,8 +101,8 @@ func PasswordPrompt(promptText string, validateFunc func(string) error) (string,
 	var responseValid bool
 	var response string
 	for !responseValid {
-		fmt.Printf("%s: \n", au.Bold(promptText))
-		bytePassword, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Printf("%s: ", au.Bold(promptText))
+		bytePassword, err := PasswordReader(os.Stdin)
 		if err != nil {
 			return "", err
 		}
@@ -93,8 +110,63 @@ func PasswordPrompt(promptText string, validateFunc func(string) error) (string,
 		if err := validateFunc(response); err != nil {
 			fmt.Printf("\nEntry not valid: %s\n", au.BrightRed(err))
 		} else {
+			fmt.Println("")
 			responseValid = true
 		}
 	}
 	return response, nil
+}
+
+// InputPassword with a custom validator along capabilities of confirming
+// the password and reading it from disk if a specified flag is set.
+func InputPassword(
+	cliCtx *cli.Context,
+	passwordFileFlag *cli.StringFlag,
+	promptText, confirmText string,
+	shouldConfirmPassword bool,
+	passwordValidator func(input string) error,
+) (string, error) {
+	if cliCtx.IsSet(passwordFileFlag.Name) {
+		passwordFilePathInput := cliCtx.String(passwordFileFlag.Name)
+		passwordFilePath, err := fileutil.ExpandPath(passwordFilePathInput)
+		if err != nil {
+			return "", errors.Wrap(err, "could not determine absolute path of password file")
+		}
+		data, err := ioutil.ReadFile(passwordFilePath)
+		if err != nil {
+			return "", errors.Wrap(err, "could not read password file")
+		}
+		enteredPassword := strings.TrimRight(string(data), "\r\n")
+		if err := passwordValidator(enteredPassword); err != nil {
+			return "", errors.Wrap(err, "password did not pass validation")
+		}
+		return enteredPassword, nil
+	}
+	if strings.Contains(strings.ToLower(promptText), "new wallet") {
+		fmt.Println("Password requirements: at least 8 characters including at least 1 alphabetical character, 1 number, and 1 unicode special character. " +
+			"Must not be a common password nor easy to guess")
+	}
+	var hasValidPassword bool
+	var password string
+	var err error
+	for !hasValidPassword {
+		password, err = PasswordPrompt(promptText, passwordValidator)
+		if err != nil {
+			return "", fmt.Errorf("could not read password: %w", err)
+		}
+		if shouldConfirmPassword {
+			passwordConfirmation, err := PasswordPrompt(confirmText, passwordValidator)
+			if err != nil {
+				return "", fmt.Errorf("could not read password confirmation: %w", err)
+			}
+			if password != passwordConfirmation {
+				log.Error("Passwords do not match")
+				continue
+			}
+			hasValidPassword = true
+		} else {
+			return password, nil
+		}
+	}
+	return password, nil
 }

@@ -9,14 +9,13 @@ import (
 	"github.com/prysmaticlabs/go-bitfield"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
 // EffectiveBalance returns the effective balance of the
 // read only validator.
-func (v *ReadOnlyValidator) EffectiveBalance() uint64 {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) EffectiveBalance() uint64 {
+	if v.IsNil() {
 		return 0
 	}
 	return v.validator.EffectiveBalance
@@ -24,8 +23,8 @@ func (v *ReadOnlyValidator) EffectiveBalance() uint64 {
 
 // ActivationEligibilityEpoch returns the activation eligibility epoch of the
 // read only validator.
-func (v *ReadOnlyValidator) ActivationEligibilityEpoch() uint64 {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) ActivationEligibilityEpoch() uint64 {
+	if v.IsNil() {
 		return 0
 	}
 	return v.validator.ActivationEligibilityEpoch
@@ -33,8 +32,8 @@ func (v *ReadOnlyValidator) ActivationEligibilityEpoch() uint64 {
 
 // ActivationEpoch returns the activation epoch of the
 // read only validator.
-func (v *ReadOnlyValidator) ActivationEpoch() uint64 {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) ActivationEpoch() uint64 {
+	if v.IsNil() {
 		return 0
 	}
 	return v.validator.ActivationEpoch
@@ -42,8 +41,8 @@ func (v *ReadOnlyValidator) ActivationEpoch() uint64 {
 
 // WithdrawableEpoch returns the withdrawable epoch of the
 // read only validator.
-func (v *ReadOnlyValidator) WithdrawableEpoch() uint64 {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) WithdrawableEpoch() uint64 {
+	if v.IsNil() {
 		return 0
 	}
 	return v.validator.WithdrawableEpoch
@@ -51,8 +50,8 @@ func (v *ReadOnlyValidator) WithdrawableEpoch() uint64 {
 
 // ExitEpoch returns the exit epoch of the
 // read only validator.
-func (v *ReadOnlyValidator) ExitEpoch() uint64 {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) ExitEpoch() uint64 {
+	if v.IsNil() {
 		return 0
 	}
 	return v.validator.ExitEpoch
@@ -60,8 +59,8 @@ func (v *ReadOnlyValidator) ExitEpoch() uint64 {
 
 // PublicKey returns the public key of the
 // read only validator.
-func (v *ReadOnlyValidator) PublicKey() [48]byte {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) PublicKey() [48]byte {
+	if v.IsNil() {
 		return [48]byte{}
 	}
 	var pubkey [48]byte
@@ -71,26 +70,31 @@ func (v *ReadOnlyValidator) PublicKey() [48]byte {
 
 // WithdrawalCredentials returns the withdrawal credentials of the
 // read only validator.
-func (v *ReadOnlyValidator) WithdrawalCredentials() []byte {
+func (v ReadOnlyValidator) WithdrawalCredentials() []byte {
 	creds := make([]byte, len(v.validator.WithdrawalCredentials))
-	copy(creds[:], v.validator.WithdrawalCredentials)
+	copy(creds, v.validator.WithdrawalCredentials)
 	return creds
 }
 
 // Slashed returns the read only validator is slashed.
-func (v *ReadOnlyValidator) Slashed() bool {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) Slashed() bool {
+	if v.IsNil() {
 		return false
 	}
 	return v.validator.Slashed
 }
 
 // CopyValidator returns the copy of the read only validator.
-func (v *ReadOnlyValidator) CopyValidator() *ethpb.Validator {
-	if v == nil || v.validator == nil {
+func (v ReadOnlyValidator) CopyValidator() *ethpb.Validator {
+	if v.IsNil() {
 		return nil
 	}
 	return CopyValidator(v.validator)
+}
+
+// CopyValidator returns the copy of the read only validator.
+func (v ReadOnlyValidator) IsNil() bool {
+	return v.validator == nil
 }
 
 // InnerStateUnsafe returns the pointer value of the underlying
@@ -108,55 +112,30 @@ func (b *BeaconState) CloneInnerState() *pbp2p.BeaconState {
 		return nil
 	}
 
-	if featureconfig.Get().NewBeaconStateLocks {
-		b.lock.RLock()
-		defer b.lock.RUnlock()
-		return &pbp2p.BeaconState{
-			GenesisTime:                 b.genesisTime(),
-			GenesisValidatorsRoot:       b.genesisValidatorRoot(),
-			Slot:                        b.slot(),
-			Fork:                        b.fork(),
-			LatestBlockHeader:           b.latestBlockHeader(),
-			BlockRoots:                  b.blockRoots(),
-			StateRoots:                  b.stateRoots(),
-			HistoricalRoots:             b.historicalRoots(),
-			Eth1Data:                    b.eth1Data(),
-			Eth1DataVotes:               b.eth1DataVotes(),
-			Eth1DepositIndex:            b.eth1DepositIndex(),
-			Validators:                  b.validators(),
-			Balances:                    b.balances(),
-			RandaoMixes:                 b.randaoMixes(),
-			Slashings:                   b.slashings(),
-			PreviousEpochAttestations:   b.previousEpochAttestations(),
-			CurrentEpochAttestations:    b.currentEpochAttestations(),
-			JustificationBits:           b.justificationBits(),
-			PreviousJustifiedCheckpoint: b.previousJustifiedCheckpoint(),
-			CurrentJustifiedCheckpoint:  b.currentJustifiedCheckpoint(),
-			FinalizedCheckpoint:         b.finalizedCheckpoint(),
-		}
-	}
+	b.lock.RLock()
+	defer b.lock.RUnlock()
 	return &pbp2p.BeaconState{
-		GenesisTime:                 b.GenesisTime(),
-		GenesisValidatorsRoot:       b.GenesisValidatorRoot(),
-		Slot:                        b.Slot(),
-		Fork:                        b.Fork(),
-		LatestBlockHeader:           b.LatestBlockHeader(),
-		BlockRoots:                  b.BlockRoots(),
-		StateRoots:                  b.StateRoots(),
-		HistoricalRoots:             b.HistoricalRoots(),
-		Eth1Data:                    b.Eth1Data(),
-		Eth1DataVotes:               b.Eth1DataVotes(),
-		Eth1DepositIndex:            b.Eth1DepositIndex(),
-		Validators:                  b.Validators(),
-		Balances:                    b.Balances(),
-		RandaoMixes:                 b.RandaoMixes(),
-		Slashings:                   b.Slashings(),
-		PreviousEpochAttestations:   b.PreviousEpochAttestations(),
-		CurrentEpochAttestations:    b.CurrentEpochAttestations(),
-		JustificationBits:           b.JustificationBits(),
-		PreviousJustifiedCheckpoint: b.PreviousJustifiedCheckpoint(),
-		CurrentJustifiedCheckpoint:  b.CurrentJustifiedCheckpoint(),
-		FinalizedCheckpoint:         b.FinalizedCheckpoint(),
+		GenesisTime:                 b.genesisTime(),
+		GenesisValidatorsRoot:       b.genesisValidatorRoot(),
+		Slot:                        b.slot(),
+		Fork:                        b.fork(),
+		LatestBlockHeader:           b.latestBlockHeader(),
+		BlockRoots:                  b.blockRoots(),
+		StateRoots:                  b.stateRoots(),
+		HistoricalRoots:             b.historicalRoots(),
+		Eth1Data:                    b.eth1Data(),
+		Eth1DataVotes:               b.eth1DataVotes(),
+		Eth1DepositIndex:            b.eth1DepositIndex(),
+		Validators:                  b.validators(),
+		Balances:                    b.balances(),
+		RandaoMixes:                 b.randaoMixes(),
+		Slashings:                   b.slashings(),
+		PreviousEpochAttestations:   b.previousEpochAttestations(),
+		CurrentEpochAttestations:    b.currentEpochAttestations(),
+		JustificationBits:           b.justificationBits(),
+		PreviousJustifiedCheckpoint: b.previousJustifiedCheckpoint(),
+		CurrentJustifiedCheckpoint:  b.currentJustifiedCheckpoint(),
+		FinalizedCheckpoint:         b.finalizedCheckpoint(),
 	}
 }
 
@@ -439,6 +418,32 @@ func (b *BeaconState) stateRoots() [][]byte {
 	return b.safeCopy2DByteSlice(b.state.StateRoots)
 }
 
+// StateRootAtIndex retrieves a specific state root based on an
+// input index value.
+func (b *BeaconState) StateRootAtIndex(idx uint64) ([]byte, error) {
+	if !b.HasInnerState() {
+		return nil, ErrNilInnerState
+	}
+	if b.state.StateRoots == nil {
+		return nil, nil
+	}
+
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+
+	return b.stateRootAtIndex(idx)
+}
+
+// stateRootAtIndex retrieves a specific state root based on an
+// input index value.
+// This assumes that a lock is already held on BeaconState.
+func (b *BeaconState) stateRootAtIndex(idx uint64) ([]byte, error) {
+	if !b.HasInnerState() {
+		return nil, ErrNilInnerState
+	}
+	return b.safeCopyBytesAtIndex(b.state.StateRoots, idx)
+}
+
 // HistoricalRoots based on epochs stored in the beacon state.
 func (b *BeaconState) HistoricalRoots() [][]byte {
 	if !b.HasInnerState() {
@@ -585,27 +590,6 @@ func (b *BeaconState) validators() []*ethpb.Validator {
 	return res
 }
 
-// ValidatorsReadOnly returns validators participating in consensus on the beacon chain. This
-// method doesn't clone the respective validators and returns read only references to the validators.
-func (b *BeaconState) ValidatorsReadOnly() []*ReadOnlyValidator {
-	if !b.HasInnerState() {
-		return nil
-	}
-	if b.state.Validators == nil {
-		return nil
-	}
-
-	b.lock.RLock()
-	defer b.lock.RUnlock()
-
-	res := make([]*ReadOnlyValidator, len(b.state.Validators))
-	for i := 0; i < len(res); i++ {
-		val := b.state.Validators[i]
-		res[i] = &ReadOnlyValidator{validator: val}
-	}
-	return res
-}
-
 // ValidatorAtIndex is the validator at the provided index.
 func (b *BeaconState) ValidatorAtIndex(idx uint64) (*ethpb.Validator, error) {
 	if !b.HasInnerState() {
@@ -627,47 +611,42 @@ func (b *BeaconState) ValidatorAtIndex(idx uint64) (*ethpb.Validator, error) {
 
 // ValidatorAtIndexReadOnly is the validator at the provided index. This method
 // doesn't clone the validator.
-func (b *BeaconState) ValidatorAtIndexReadOnly(idx uint64) (*ReadOnlyValidator, error) {
+func (b *BeaconState) ValidatorAtIndexReadOnly(idx uint64) (ReadOnlyValidator, error) {
 	if !b.HasInnerState() {
-		return nil, ErrNilInnerState
+		return ReadOnlyValidator{}, ErrNilInnerState
 	}
 	if b.state.Validators == nil {
-		return &ReadOnlyValidator{}, nil
+		return ReadOnlyValidator{}, nil
 	}
 	if uint64(len(b.state.Validators)) <= idx {
-		return nil, fmt.Errorf("index %d out of range", idx)
+		return ReadOnlyValidator{}, fmt.Errorf("index %d out of range", idx)
 	}
 
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 
-	return &ReadOnlyValidator{b.state.Validators[idx]}, nil
+	return ReadOnlyValidator{b.state.Validators[idx]}, nil
 }
 
 // ValidatorIndexByPubkey returns a given validator by its 48-byte public key.
 func (b *BeaconState) ValidatorIndexByPubkey(key [48]byte) (uint64, bool) {
-	if b == nil || b.valIdxMap == nil {
+	if b == nil || b.valMapHandler == nil || b.valMapHandler.valIdxMap == nil {
 		return 0, false
 	}
 	b.lock.RLock()
 	defer b.lock.RUnlock()
-	idx, ok := b.valIdxMap[key]
+	idx, ok := b.valMapHandler.valIdxMap[key]
 	return idx, ok
 }
 
 func (b *BeaconState) validatorIndexMap() map[[48]byte]uint64 {
-	if b == nil || b.valIdxMap == nil {
+	if b == nil || b.valMapHandler == nil || b.valMapHandler.valIdxMap == nil {
 		return map[[48]byte]uint64{}
 	}
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 
-	m := make(map[[48]byte]uint64, len(b.valIdxMap))
-
-	for k, v := range b.valIdxMap {
-		m[k] = v
-	}
-	return m
+	return b.valMapHandler.copy().valIdxMap
 }
 
 // PubkeyAtIndex returns the pubkey at the given
@@ -682,6 +661,9 @@ func (b *BeaconState) PubkeyAtIndex(idx uint64) [48]byte {
 	b.lock.RLock()
 	defer b.lock.RUnlock()
 
+	if b.state.Validators[idx] == nil {
+		return [48]byte{}
+	}
 	return bytesutil.ToBytes48(b.state.Validators[idx].PublicKey)
 }
 
@@ -698,7 +680,7 @@ func (b *BeaconState) NumValidators() int {
 
 // ReadFromEveryValidator reads values from every validator and applies it to the provided function.
 // Warning: This method is potentially unsafe, as it exposes the actual validator registry.
-func (b *BeaconState) ReadFromEveryValidator(f func(idx int, val *ReadOnlyValidator) error) error {
+func (b *BeaconState) ReadFromEveryValidator(f func(idx int, val ReadOnlyValidator) error) error {
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
@@ -710,7 +692,7 @@ func (b *BeaconState) ReadFromEveryValidator(f func(idx int, val *ReadOnlyValida
 	b.lock.RUnlock()
 
 	for i, v := range validators {
-		err := f(i, &ReadOnlyValidator{validator: v})
+		err := f(i, ReadOnlyValidator{validator: v})
 		if err != nil {
 			return err
 		}
@@ -1069,19 +1051,6 @@ func (b *BeaconState) FinalizedCheckpointEpoch() uint64 {
 	}
 	b.lock.RLock()
 	defer b.lock.RUnlock()
-
-	return b.state.FinalizedCheckpoint.Epoch
-}
-
-// finalizedCheckpointEpoch returns the epoch value of the finalized checkpoint.
-// This assumes that a lock is already held on BeaconState.
-func (b *BeaconState) finalizedCheckpointEpoch() uint64 {
-	if !b.HasInnerState() {
-		return 0
-	}
-	if b.state.FinalizedCheckpoint == nil {
-		return 0
-	}
 
 	return b.state.FinalizedCheckpoint.Epoch
 }

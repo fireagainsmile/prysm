@@ -30,7 +30,7 @@ type attList []*ethpb.Attestation
 var aggregateSignatures = bls.AggregateSignatures
 var signatureFromBytes = bls.SignatureFromBytes
 
-var log = logrus.WithField("prefix", "aggregation.attestations")
+var _ = logrus.WithField("prefix", "aggregation.attestations")
 
 // ErrInvalidAttestationCount is returned when insufficient number
 // of attestations is provided for aggregation.
@@ -50,7 +50,7 @@ func Aggregate(atts []*ethpb.Attestation) ([]*ethpb.Attestation, error) {
 }
 
 // AggregatePair aggregates pair of attestations a1 and a2 together.
-func AggregatePair(a1 *ethpb.Attestation, a2 *ethpb.Attestation) (*ethpb.Attestation, error) {
+func AggregatePair(a1, a2 *ethpb.Attestation) (*ethpb.Attestation, error) {
 	if a1.AggregationBits.Len() != a2.AggregationBits.Len() {
 		return nil, aggregation.ErrBitsDifferentLen
 	}

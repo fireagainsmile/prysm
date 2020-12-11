@@ -1,12 +1,10 @@
 package kv
 
 import (
-	"bytes"
 	"context"
-	"flag"
 	"testing"
 
-	"github.com/urfave/cli/v2"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 type publicKeyTestStruct struct {
@@ -34,82 +32,52 @@ func init() {
 }
 
 func TestNilDBValidatorPublicKey(t *testing.T) {
-	app := cli.App{}
-	set := flag.NewFlagSet("test", 0)
-	db := setupDB(t, cli.NewContext(&app, set, nil))
+
+	db := setupDB(t)
 	ctx := context.Background()
 
 	validatorID := uint64(1)
 
 	pk, err := db.ValidatorPubKey(ctx, validatorID)
-	if err != nil {
-		t.Fatal("nil ValidatorPubKey should not return error")
-	}
-	if pk != nil {
-		t.Fatal("ValidatorPubKey should return nil")
-	}
-
+	require.NoError(t, err, "Nil ValidatorPubKey should not return error")
+	require.DeepEqual(t, ([]uint8)(nil), pk)
 }
 
 func TestSavePubKey(t *testing.T) {
-	app := cli.App{}
-	set := flag.NewFlagSet("test", 0)
-	db := setupDB(t, cli.NewContext(&app, set, nil))
+
+	db := setupDB(t)
 	ctx := context.Background()
 
 	for _, tt := range pkTests {
 		err := db.SavePubKey(ctx, tt.validatorID, tt.pk)
-		if err != nil {
-			t.Fatalf("save validator public key failed: %v", err)
-		}
+		require.NoError(t, err, "Save validator public key failed")
 
 		pk, err := db.ValidatorPubKey(ctx, tt.validatorID)
-		if err != nil {
-			t.Fatalf("failed to get validator public key: %v", err)
-		}
-
-		if pk == nil || !bytes.Equal(pk, tt.pk) {
-			t.Fatalf("get should return validator public key: %v", tt.pk)
-		}
+		require.NoError(t, err, "Failed to get validator public key")
+		require.NotNil(t, pk)
+		require.DeepEqual(t, tt.pk, pk, "Should return validator public key")
 	}
-
 }
 
 func TestDeletePublicKey(t *testing.T) {
-	app := cli.App{}
-	set := flag.NewFlagSet("test", 0)
-	db := setupDB(t, cli.NewContext(&app, set, nil))
+
+	db := setupDB(t)
 	ctx := context.Background()
 
 	for _, tt := range pkTests {
-
-		err := db.SavePubKey(ctx, tt.validatorID, tt.pk)
-		if err != nil {
-			t.Fatalf("save validator public key failed: %v", err)
-		}
+		require.NoError(t, db.SavePubKey(ctx, tt.validatorID, tt.pk), "Save validator public key failed")
 	}
 
 	for _, tt := range pkTests {
 		pk, err := db.ValidatorPubKey(ctx, tt.validatorID)
-		if err != nil {
-			t.Fatalf("failed to get validator public key: %v", err)
-		}
+		require.NoError(t, err, "Failed to get validator public key")
+		require.NotNil(t, pk)
+		require.DeepEqual(t, tt.pk, pk, "Should return validator public key")
 
-		if pk == nil || !bytes.Equal(pk, tt.pk) {
-			t.Fatalf("get should return validator public key: %v", pk)
-		}
 		err = db.DeletePubKey(ctx, tt.validatorID)
-		if err != nil {
-			t.Fatalf("delete validator public key: %v", err)
-		}
+		require.NoError(t, err, "Delete validator public key")
 		pk, err = db.ValidatorPubKey(ctx, tt.validatorID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if pk != nil {
-			t.Errorf("Expected validator public key to be deleted, received: %v", pk)
-		}
-
+		require.NoError(t, err)
+		require.DeepEqual(t, []byte(nil), pk, "Expected validator public key to be deleted")
 	}
-
 }

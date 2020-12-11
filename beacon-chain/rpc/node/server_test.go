@@ -15,6 +15,7 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	mockP2p "github.com/prysmaticlabs/prysm/beacon-chain/p2p/testing"
 	mockSync "github.com/prysmaticlabs/prysm/beacon-chain/sync/initial-sync/testing"
+	pbrpc "github.com/prysmaticlabs/prysm/proto/beacon/rpc/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
@@ -77,6 +78,19 @@ func TestNodeServer_GetVersion(t *testing.T) {
 	assert.Equal(t, v, res.Version)
 }
 
+func TestNodeServer_GetLogsEndpoint(t *testing.T) {
+	ns := &Server{
+		BeaconMonitoringHost: "localhost",
+		BeaconMonitoringPort: 8080,
+	}
+	res, err := ns.GetLogsEndpoint(context.Background(), &ptypes.Empty{})
+	require.NoError(t, err)
+	want := &pbrpc.LogsEndpointResponse{
+		BeaconLogsEndpoint: "localhost:8080",
+	}
+	assert.DeepEqual(t, want, res)
+}
+
 func TestNodeServer_GetImplementedServices(t *testing.T) {
 	server := grpc.NewServer()
 	ns := &Server{
@@ -96,6 +110,7 @@ func TestNodeServer_GetHost(t *testing.T) {
 	peersProvider := &mockP2p.MockPeersProvider{}
 	mP2P := mockP2p.NewTestP2P(t)
 	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
 	db, err := enode.OpenDB("")
 	require.NoError(t, err)
 	lNode := enode.NewLocalNode(db, key)

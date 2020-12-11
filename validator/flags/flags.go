@@ -3,24 +3,23 @@
 package flags
 
 import (
-	"os"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"time"
 
+	"github.com/prysmaticlabs/prysm/shared/fileutil"
 	"github.com/urfave/cli/v2"
 )
 
 const (
-	// WalletDefaultDirName for accounts-v2.
+	// WalletDefaultDirName for accounts.
 	WalletDefaultDirName = "prysm-wallet-v2"
-	// PasswordsDefaultDirName where account-v2 passwords are stored.
-	PasswordsDefaultDirName = "prysm-wallet-v2-passwords"
+	// DefaultGatewayHost for the validator client.
+	DefaultGatewayHost = "127.0.0.1"
 )
 
 var (
-	// DisableAccountMetricsFlag defines the graffiti value included in proposed blocks, default false.
+	// DisableAccountMetricsFlag disables the prometheus metrics for validator accounts, default false.
 	DisableAccountMetricsFlag = &cli.BoolFlag{
 		Name: "disable-account-metrics",
 		Usage: "Disable prometheus metrics for validator accounts. Operators with high volumes " +
@@ -33,10 +32,34 @@ var (
 		Usage: "Beacon node RPC provider endpoint",
 		Value: "127.0.0.1:4000",
 	}
+	// BeaconRPCGatewayProviderFlag defines a beacon node JSON-RPC endpoint.
+	BeaconRPCGatewayProviderFlag = &cli.StringFlag{
+		Name:  "beacon-rpc-gateway-provider",
+		Usage: "Beacon node RPC gateway provider endpoint",
+		Value: "127.0.0.1:3500",
+	}
 	// CertFlag defines a flag for the node's TLS certificate.
 	CertFlag = &cli.StringFlag{
 		Name:  "tls-cert",
 		Usage: "Certificate for secure gRPC. Pass this and the tls-key flag in order to use gRPC securely.",
+	}
+	// EnableRPCFlag enables controlling the validator client via gRPC (without web UI).
+	EnableRPCFlag = &cli.BoolFlag{
+		Name:  "rpc",
+		Usage: "Enables the RPC server for the validator client (without Web UI)",
+		Value: false,
+	}
+	// RPCHost defines the host on which the RPC server should listen.
+	RPCHost = &cli.StringFlag{
+		Name:  "rpc-host",
+		Usage: "Host on which the RPC server should listen",
+		Value: "127.0.0.1",
+	}
+	// RPCPort defines a validator client RPC port to open.
+	RPCPort = &cli.IntFlag{
+		Name:  "rpc-port",
+		Usage: "RPC port exposed by a validator client",
+		Value: 7000,
 	}
 	// SlasherRPCProviderFlag defines a slasher node RPC endpoint.
 	SlasherRPCProviderFlag = &cli.StringFlag{
@@ -77,110 +100,130 @@ var (
 		Usage: "A comma separated list of key value pairs to pass as gRPC headers for all gRPC " +
 			"calls. Example: --grpc-headers=key=value",
 	}
-	// KeyManager specifies the key manager to use.
-	KeyManager = &cli.StringFlag{
-		Name:  "keymanager",
-		Usage: "The keymanger to use (unencrypted, interop, keystore, wallet)",
-		Value: "",
+	// GRPCGatewayHost specifies a gRPC gateway host for the validator client.
+	GRPCGatewayHost = &cli.StringFlag{
+		Name:  "grpc-gateway-host",
+		Usage: "The host on which the gateway server runs on",
+		Value: DefaultGatewayHost,
 	}
-	// KeyManagerOpts specifies the key manager options.
-	KeyManagerOpts = &cli.StringFlag{
-		Name:  "keymanageropts",
-		Usage: "The options for the keymanger, either a JSON string or path to same",
-		Value: "",
+	// GRPCGatewayPort enables a gRPC gateway to be exposed for the validator client.
+	GRPCGatewayPort = &cli.IntFlag{
+		Name:  "grpc-gateway-port",
+		Usage: "Enable gRPC gateway for JSON requests",
+		Value: 7500,
 	}
-	// KeystorePathFlag defines the location of the keystore directory for a validator's account.
-	KeystorePathFlag = &cli.StringFlag{
-		Name:  "keystore-path",
-		Usage: "Path to the desired keystore directory",
-	}
+	// GPRCGatewayCorsDomain serves preflight requests when serving gRPC JSON gateway.
+	GPRCGatewayCorsDomain = &cli.StringFlag{
+		Name: "grpc-gateway-corsdomain",
+		Usage: "Comma separated list of domains from which to accept cross origin requests " +
+			"(browser enforced). This flag has no effect if not used with --grpc-gateway-port.",
+		Value: "http://localhost:4242,http://127.0.0.1:4242,http://localhost:4200,http://0.0.0.0:4242,http://0.0.0.0:4200"}
 	// MonitoringPortFlag defines the http port used to serve prometheus metrics.
 	MonitoringPortFlag = &cli.IntFlag{
 		Name:  "monitoring-port",
 		Usage: "Port used to listening and respond metrics for prometheus.",
 		Value: 8081,
 	}
-	// PasswordFlag defines the password value for storing and retrieving validator private keys from the keystore.
-	PasswordFlag = &cli.StringFlag{
-		Name:  "password",
-		Usage: "String value of the password for your validator private keys",
-	}
-	// SourceDirectories defines the locations of the source validator databases while managing validators.
-	SourceDirectories = &cli.StringFlag{
-		Name:  "source-dirs",
-		Usage: "The directory of source validator databases",
-	}
-	// SourceDirectory defines the location of the source validator database while managing validators.
-	SourceDirectory = &cli.StringFlag{
-		Name:  "source-dir",
-		Usage: "The directory of the source validator database",
-	}
-	// TargetDirectory defines the location of the target validator database while managing validators.
-	TargetDirectory = &cli.StringFlag{
-		Name:  "target-dir",
-		Usage: "The directory of the target validator database",
-	}
-	// UnencryptedKeysFlag specifies a file path of a JSON file of unencrypted validator keys as an
-	// alternative from launching the validator client from decrypting a keystore directory.
-	UnencryptedKeysFlag = &cli.StringFlag{
-		Name:  "unencrypted-keys",
-		Usage: "Filepath to a JSON file of unencrypted validator keys for easier launching of the validator client",
-		Value: "",
-	}
-	// WalletDirFlag defines the path to a wallet directory for Prysm accounts-v2.
+	// WalletDirFlag defines the path to a wallet directory for Prysm accounts.
 	WalletDirFlag = &cli.StringFlag{
 		Name:  "wallet-dir",
 		Usage: "Path to a wallet directory on-disk for Prysm validator accounts",
 		Value: filepath.Join(DefaultValidatorDir(), WalletDefaultDirName),
 	}
-	// WalletPasswordsDirFlag defines the path for a passwords directory for
-	// Prysm accounts-v2.
-	WalletPasswordsDirFlag = &cli.StringFlag{
-		Name:  "passwords-dir",
-		Usage: "Path to a directory on-disk where account passwords are stored",
-		Value: filepath.Join(DefaultValidatorDir(), PasswordsDefaultDirName),
-	}
-	// AccountPasswordFileFlag is path to a file containing a password for a new validator account.
+	// AccountPasswordFileFlag is path to a file containing a password for a validator account.
 	AccountPasswordFileFlag = &cli.StringFlag{
 		Name:  "account-password-file",
-		Usage: "Path to a plain-text, .txt file containing a password for a new validator account",
+		Usage: "Path to a plain-text, .txt file containing a password for a validator account",
 	}
 	// WalletPasswordFileFlag is the path to a file containing your wallet password.
 	WalletPasswordFileFlag = &cli.StringFlag{
 		Name:  "wallet-password-file",
 		Usage: "Path to a plain-text, .txt file containing your wallet password",
 	}
+	// Mnemonic25thWordFileFlag defines a path to a file containing a "25th" word mnemonic passphrase for advanced users.
+	Mnemonic25thWordFileFlag = &cli.StringFlag{
+		Name:  "mnemonic-25th-word-file",
+		Usage: "(Advanced) Path to a plain-text, .txt file containing a 25th word passphrase for your mnemonic for HD wallets",
+	}
+	// SkipMnemonic25thWordCheckFlag allows for skipping a check for mnemonic 25th word passphrases for HD wallets.
+	SkipMnemonic25thWordCheckFlag = &cli.StringFlag{
+		Name:  "skip-mnemonic-25th-word-check",
+		Usage: "Allows for skipping the check for a mnemonic 25th word passphrase for HD wallets",
+	}
+	// ImportPrivateKeyFileFlag allows for directly importing a private key hex string as an account.
+	ImportPrivateKeyFileFlag = &cli.StringFlag{
+		Name:  "import-private-key-file",
+		Usage: "Path to a plain-text, .txt file containing a hex string representation of a private key to import",
+	}
 	// MnemonicFileFlag is used to enter a file to mnemonic phrase for new wallet creation, non-interactively.
 	MnemonicFileFlag = &cli.StringFlag{
 		Name:  "mnemonic-file",
 		Usage: "File to retrieve mnemonic for non-interactively passing a mnemonic phrase into wallet recover.",
 	}
-	// SkipMnemonicConfirmFlag is used to skip the withdrawal key mnemonic phrase prompt confirmation.
-	SkipMnemonicConfirmFlag = &cli.BoolFlag{
-		Name:  "skip-mnemonic-confirm",
-		Usage: "Skip the withdrawal key mnemonic phrase prompt confirmation",
-	}
-	// ShowDepositDataFlag for accounts-v2.
+	// ShowDepositDataFlag for accounts.
 	ShowDepositDataFlag = &cli.BoolFlag{
 		Name:  "show-deposit-data",
-		Usage: "Display raw eth1 tx deposit data for validator accounts-v2",
+		Usage: "Display raw eth1 tx deposit data for validator accounts",
 		Value: false,
 	}
-	// AccountsFlag for non-interactive usage of accounts exporting, sets a list of account names or all to be exported.
-	AccountsFlag = &cli.StringSliceFlag{
-		Name:  "accounts",
-		Usage: "List of account names to export, or \"all\" to backup all accounts",
+	// ShowPrivateKeysFlag for accounts.
+	ShowPrivateKeysFlag = &cli.BoolFlag{
+		Name:  "show-private-keys",
+		Usage: "Display the private keys for validator accounts",
+		Value: false,
 	}
 	// NumAccountsFlag defines the amount of accounts to generate for derived wallets.
-	NumAccountsFlag = &cli.Int64Flag{
+	NumAccountsFlag = &cli.IntFlag{
 		Name:  "num-accounts",
 		Usage: "Number of accounts to generate for derived wallets",
 		Value: 1,
 	}
+	// DeletePublicKeysFlag defines a comma-separated list of hex string public keys
+	// for accounts which a user desires to delete from their wallet.
+	DeletePublicKeysFlag = &cli.StringFlag{
+		Name:  "delete-public-keys",
+		Usage: "Comma-separated list of public key hex strings to specify which validator accounts to delete",
+		Value: "",
+	}
+	// DisablePublicKeysFlag defines a comma-separated list of hex string public keys
+	// for accounts which a user desires to disable for their wallet.
+	DisablePublicKeysFlag = &cli.StringFlag{
+		Name:  "disable-public-keys",
+		Usage: "Comma-separated list of public key hex strings to specify which validator accounts to disable",
+		Value: "",
+	}
+	// EnablePublicKeysFlag defines a comma-separated list of hex string public keys
+	// for accounts which a user desires to enable for their wallet.
+	EnablePublicKeysFlag = &cli.StringFlag{
+		Name:  "enable-public-keys",
+		Usage: "Comma-separated list of public key hex strings to specify which validator accounts to enable",
+		Value: "",
+	}
+	// BackupPublicKeysFlag defines a comma-separated list of hex string public keys
+	// for accounts which a user desires to backup from their wallet.
+	BackupPublicKeysFlag = &cli.StringFlag{
+		Name:  "backup-public-keys",
+		Usage: "Comma-separated list of public key hex strings to specify which validator accounts to backup",
+		Value: "",
+	}
+	// VoluntaryExitPublicKeysFlag defines a comma-separated list of hex string public keys
+	// for accounts on which a user wants to perform a voluntary exit.
+	VoluntaryExitPublicKeysFlag = &cli.StringFlag{
+		Name: "public-keys",
+		Usage: "Comma-separated list of public key hex strings to specify on which validator accounts to perform " +
+			"a voluntary exit",
+		Value: "",
+	}
+	// BackupPasswordFile for encrypting accounts a user wishes to back up.
+	BackupPasswordFile = &cli.StringFlag{
+		Name:  "backup-password-file",
+		Usage: "Path to a plain-text, .txt file containing the desired password for your backed up accounts",
+		Value: "",
+	}
 	// BackupDirFlag defines the path for the zip backup of the wallet will be created.
 	BackupDirFlag = &cli.StringFlag{
 		Name:  "backup-dir",
-		Usage: "Path to a directory where accounts will be exported into a zip file",
+		Usage: "Path to a directory where accounts will be backed up into a zip file",
 		Value: DefaultValidatorDir(),
 	}
 	// KeysDirFlag defines the path for a directory where keystores to be imported at stored.
@@ -193,6 +236,12 @@ var (
 		Name:  "grpc-remote-address",
 		Usage: "Host:port of a gRPC server for a remote keymanager",
 		Value: "",
+	}
+	// DisableRemoteSignerTlsFlag disables TLS when connecting to a remote signer.
+	DisableRemoteSignerTlsFlag = &cli.BoolFlag{
+		Name:  "disable-remote-signer-tls",
+		Usage: "Disables TLS when connecting to a remote signer. (WARNING! This will result in insecure requests!)",
+		Value: false,
 	}
 	// RemoteSignerCertPathFlag defines the path to a client.crt file for a wallet to connect to
 	// a secure signer via TLS and gRPC.
@@ -218,15 +267,32 @@ var (
 	// KeymanagerKindFlag defines the kind of keymanager desired by a user during wallet creation.
 	KeymanagerKindFlag = &cli.StringFlag{
 		Name:  "keymanager-kind",
-		Usage: "Kind of keymanager, either direct, derived, or remote, specified during wallet creation",
+		Usage: "Kind of keymanager, either imported, derived, or remote, specified during wallet creation",
 		Value: "",
+	}
+	// SkipDepositConfirmationFlag skips the y/n confirmation prompt for sending a deposit to the deposit contract.
+	SkipDepositConfirmationFlag = &cli.BoolFlag{
+		Name:  "skip-deposit-confirmation",
+		Usage: "Skips the y/n confirmation prompt for sending a deposit to the deposit contract",
+		Value: false,
+	}
+	// EnableWebFlag enables controlling the validator client via the Prysm web ui. This is a work in progress.
+	EnableWebFlag = &cli.BoolFlag{
+		Name:  "web",
+		Usage: "Enables the web portal for the validator client (work in progress)",
+		Value: false,
+	}
+	// GraffitiFileFlag specifies the file path to load graffiti values.
+	GraffitiFileFlag = &cli.StringFlag{
+		Name:  "graffiti-file",
+		Usage: "The path to a YAML file with graffiti values",
 	}
 )
 
 // DefaultValidatorDir returns OS-specific default validator directory.
 func DefaultValidatorDir() string {
 	// Try to place the data folder in the user's home dir
-	home := homeDir()
+	home := fileutil.HomeDir()
 	if home != "" {
 		if runtime.GOOS == "darwin" {
 			return filepath.Join(home, "Library", "Eth2Validators")
@@ -237,16 +303,5 @@ func DefaultValidatorDir() string {
 		}
 	}
 	// As we cannot guess a stable location, return empty and handle later
-	return ""
-}
-
-// homeDir returns home directory path.
-func homeDir() string {
-	if home := os.Getenv("HOME"); home != "" {
-		return home
-	}
-	if usr, err := user.Current(); err == nil {
-		return usr.HomeDir
-	}
 	return ""
 }

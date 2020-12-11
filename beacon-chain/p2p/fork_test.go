@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"bytes"
+	"context"
 	"math/rand"
 	"os"
 	"path"
@@ -13,11 +14,12 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	ma "github.com/multiformats/go-multiaddr"
+	mock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/p2putils"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/testutil"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	"github.com/sirupsen/logrus"
@@ -30,7 +32,10 @@ func TestStartDiscv5_DifferentForkDigests(t *testing.T) {
 	genesisTime := time.Now()
 	genesisValidatorsRoot := make([]byte, 32)
 	s := &Service{
-		cfg:                   &Config{UDPPort: uint(port)},
+		cfg: &Config{
+			UDPPort:       uint(port),
+			StateNotifier: &mock.MockStateNotifier{},
+		},
 		genesisTime:           genesisTime,
 		genesisValidatorsRoot: genesisValidatorsRoot,
 	}
@@ -42,6 +47,7 @@ func TestStartDiscv5_DifferentForkDigests(t *testing.T) {
 	cfg := &Config{
 		Discv5BootStrapAddr: []string{bootNode.String()},
 		UDPPort:             uint(port),
+		StateNotifier:       &mock.MockStateNotifier{},
 	}
 
 	var listeners []*discover.UDPv5
@@ -86,14 +92,12 @@ func TestStartDiscv5_DifferentForkDigests(t *testing.T) {
 	cfg.UDPPort = 14000
 	cfg.TCPPort = 14001
 	cfg.MaxPeers = 30
-	s, err = NewService(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s, err = NewService(context.Background(), cfg)
+	require.NoError(t, err)
 	s.genesisTime = genesisTime
 	s.genesisValidatorsRoot = make([]byte, 32)
 	s.dv5Listener = lastListener
-	addrs := []ma.Multiaddr{}
+	var addrs []ma.Multiaddr
 
 	for _, n := range nodes {
 		if s.filterPeer(n) {
@@ -119,6 +123,7 @@ func TestStartDiscv5_SameForkDigests_DifferentNextForkData(t *testing.T) {
 		cfg:                   &Config{UDPPort: uint(port)},
 		genesisTime:           genesisTime,
 		genesisValidatorsRoot: genesisValidatorsRoot,
+		stateNotifier:         &mock.MockStateNotifier{},
 	}
 	bootListener, err := s.createListener(ipAddr, pkey)
 	require.NoError(t, err)
@@ -149,6 +154,7 @@ func TestStartDiscv5_SameForkDigests_DifferentNextForkData(t *testing.T) {
 			cfg:                   cfg,
 			genesisTime:           genesisTime,
 			genesisValidatorsRoot: genesisValidatorsRoot,
+			stateNotifier:         &mock.MockStateNotifier{},
 		}
 		listener, err := s.startDiscoveryV5(ipAddr, pkey)
 		assert.NoError(t, err, "Could not start discovery for node")
@@ -176,13 +182,14 @@ func TestStartDiscv5_SameForkDigests_DifferentNextForkData(t *testing.T) {
 	cfg.UDPPort = 14000
 	cfg.TCPPort = 14001
 	cfg.MaxPeers = 30
-	s, err = NewService(cfg)
+	cfg.StateNotifier = &mock.MockStateNotifier{}
+	s, err = NewService(context.Background(), cfg)
 	require.NoError(t, err)
 
 	s.genesisTime = genesisTime
 	s.genesisValidatorsRoot = make([]byte, 32)
 	s.dv5Listener = lastListener
-	addrs := []ma.Multiaddr{}
+	var addrs []ma.Multiaddr
 
 	for _, n := range nodes {
 		if s.filterPeer(n) {
@@ -195,7 +202,7 @@ func TestStartDiscv5_SameForkDigests_DifferentNextForkData(t *testing.T) {
 		t.Error("Expected to have valid peers, got 0")
 	}
 
-	testutil.AssertLogsContain(t, hook, "Peer matches fork digest but has different next fork epoch")
+	require.LogsContain(t, hook, "Peer matches fork digest but has different next fork epoch")
 	require.NoError(t, s.Stop())
 }
 
@@ -226,7 +233,7 @@ func TestDiscv5_AddRetrieveForkEntryENR(t *testing.T) {
 	forkEntry := enr.WithEntry(eth2ENRKey, enc)
 	// In epoch 1 of current time, the fork version should be
 	// {0, 0, 0, 1} according to the configuration override above.
-	temp := testutil.TempDir()
+	temp := t.TempDir()
 	randNum := rand.Int()
 	tempPath := path.Join(temp, strconv.Itoa(randNum))
 	require.NoError(t, os.Mkdir(tempPath, 0700))
@@ -245,14 +252,14 @@ func TestDiscv5_AddRetrieveForkEntryENR(t *testing.T) {
 	if !bytes.Equal(resp.CurrentForkDigest, want[:]) {
 		t.Errorf("Wanted fork digest: %v, received %v", want, resp.CurrentForkDigest)
 	}
-	if !bytes.Equal(resp.NextForkVersion[:], nextForkVersion) {
+	if !bytes.Equal(resp.NextForkVersion, nextForkVersion) {
 		t.Errorf("Wanted next fork version: %v, received %v", nextForkVersion, resp.NextForkVersion)
 	}
 	assert.Equal(t, nextForkEpoch, resp.NextForkEpoch, "Unexpected next fork epoch")
 }
 
 func TestAddForkEntry_Genesis(t *testing.T) {
-	temp := testutil.TempDir()
+	temp := t.TempDir()
 	randNum := rand.Int()
 	tempPath := path.Join(temp, strconv.Itoa(randNum))
 	require.NoError(t, os.Mkdir(tempPath, 0700))
@@ -262,7 +269,7 @@ func TestAddForkEntry_Genesis(t *testing.T) {
 	require.NoError(t, err)
 
 	localNode := enode.NewLocalNode(db, pkey)
-	localNode, err = addForkEntry(localNode, time.Now().Add(10*time.Second), []byte{'A', 'B', 'C', 'D'})
+	localNode, err = addForkEntry(localNode, time.Now().Add(10*time.Second), bytesutil.PadTo([]byte{'A', 'B', 'C', 'D'}, 32))
 	require.NoError(t, err)
 	forkEntry, err := retrieveForkEntry(localNode.Node().Record())
 	require.NoError(t, err)

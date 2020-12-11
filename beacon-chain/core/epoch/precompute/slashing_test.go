@@ -9,31 +9,41 @@ import (
 	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
-func TestProcessSlashingsPrecompute_NotSlashed(t *testing.T) {
+func TestProcessSlashingsPrecompute_NotSlashedWithSlashedTrue(t *testing.T) {
 	s, err := beaconstate.InitializeFromProto(&pb.BeaconState{
 		Slot:       0,
 		Validators: []*ethpb.Validator{{Slashed: true}},
 		Balances:   []uint64{params.BeaconConfig().MaxEffectiveBalance},
 		Slashings:  []uint64{0, 1e9},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	pBal := &precompute.Balance{ActiveCurrentEpoch: params.BeaconConfig().MaxEffectiveBalance}
-	if err := precompute.ProcessSlashingsPrecompute(s, pBal); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, precompute.ProcessSlashingsPrecompute(s, pBal))
 
 	wanted := params.BeaconConfig().MaxEffectiveBalance
-	if s.Balances()[0] != wanted {
-		t.Errorf("Wanted slashed balance: %d, got: %d", wanted, s.Balances()[0])
-	}
+	assert.Equal(t, wanted, s.Balances()[0], "Unexpected slashed balance")
+}
+
+func TestProcessSlashingsPrecompute_NotSlashedWithSlashedFalse(t *testing.T) {
+	s, err := beaconstate.InitializeFromProto(&pb.BeaconState{
+		Slot:       0,
+		Validators: []*ethpb.Validator{{}},
+		Balances:   []uint64{params.BeaconConfig().MaxEffectiveBalance},
+		Slashings:  []uint64{0, 1e9},
+	})
+	require.NoError(t, err)
+	pBal := &precompute.Balance{ActiveCurrentEpoch: params.BeaconConfig().MaxEffectiveBalance}
+	require.NoError(t, precompute.ProcessSlashingsPrecompute(s, pBal))
+
+	wanted := params.BeaconConfig().MaxEffectiveBalance
+	assert.Equal(t, wanted, s.Balances()[0], "Unexpected slashed balance")
 }
 
 func TestProcessSlashingsPrecompute_SlashedLess(t *testing.T) {
-
 	tests := []struct {
 		state *pb.BeaconState
 		want  uint64
@@ -48,9 +58,9 @@ func TestProcessSlashingsPrecompute_SlashedLess(t *testing.T) {
 				Balances:  []uint64{params.BeaconConfig().MaxEffectiveBalance, params.BeaconConfig().MaxEffectiveBalance},
 				Slashings: []uint64{0, 1e9},
 			},
-			// penalty    = validator balance / increment * (3*total_penalties) / total_balance * increment
-			// 3000000000 = (32 * 1e9)        / (1 * 1e9) * (3*1e9)             / (32*1e9)      * (1 * 1e9)
-			want: uint64(29000000000), // 32 * 1e9 - 3000000000
+			// penalty    = validator balance / increment * (2*total_penalties) / total_balance * increment
+			// 1000000000 = (32 * 1e9)        / (1 * 1e9) * (1*1e9)             / (32*1e9)      * (1 * 1e9)
+			want: uint64(31000000000), // 32 * 1e9 - 1000000000
 		},
 		{
 			state: &pb.BeaconState{
@@ -64,9 +74,9 @@ func TestProcessSlashingsPrecompute_SlashedLess(t *testing.T) {
 				Balances:  []uint64{params.BeaconConfig().MaxEffectiveBalance, params.BeaconConfig().MaxEffectiveBalance, params.BeaconConfig().MaxEffectiveBalance},
 				Slashings: []uint64{0, 1e9},
 			},
-			// penalty    = validator balance / increment * (3*total_penalties) / total_balance * increment
-			// 1000000000 = (32 * 1e9)        / (1 * 1e9) * (3*1e9)             / (64*1e9)      * (1 * 1e9)
-			want: uint64(31000000000), // 32 * 1e9 - 1000000000
+			// penalty    = validator balance / increment * (2*total_penalties) / total_balance * increment
+			// 500000000 = (32 * 1e9)        / (1 * 1e9) * (1*1e9)             / (32*1e9)      * (1 * 1e9)
+			want: uint64(32000000000), // 32 * 1e9 - 500000000
 		},
 		{
 			state: &pb.BeaconState{
@@ -81,8 +91,8 @@ func TestProcessSlashingsPrecompute_SlashedLess(t *testing.T) {
 				Slashings: []uint64{0, 2 * 1e9},
 			},
 			// penalty    = validator balance / increment * (3*total_penalties) / total_balance * increment
-			// 3000000000 = (32 * 1e9)        / (1 * 1e9) * (3*2e9)             / (64*1e9)      * (1 * 1e9)
-			want: uint64(29000000000), // 32 * 1e9 - 3000000000
+			// 1000000000 = (32 * 1e9)        / (1 * 1e9) * (1*2e9)             / (64*1e9)      * (1 * 1e9)
+			want: uint64(31000000000), // 32 * 1e9 - 1000000000
 		},
 		{
 			state: &pb.BeaconState{
@@ -95,8 +105,8 @@ func TestProcessSlashingsPrecompute_SlashedLess(t *testing.T) {
 				Slashings: []uint64{0, 1e9},
 			},
 			// penalty    = validator balance           / increment * (3*total_penalties) / total_balance        * increment
-			// 3000000000 = (32  * 1e9 - 1*1e9)         / (1 * 1e9) * (3*1e9)             / (31*1e9)             * (1 * 1e9)
-			want: uint64(28000000000), // 31 * 1e9 - 3000000000
+			// 2000000000 = (32  * 1e9 - 1*1e9)         / (1 * 1e9) * (2*1e9)             / (31*1e9)             * (1 * 1e9)
+			want: uint64(30000000000), // 32 * 1e9 - 2000000000
 		},
 	}
 
@@ -114,21 +124,9 @@ func TestProcessSlashingsPrecompute_SlashedLess(t *testing.T) {
 
 			original := proto.Clone(tt.state)
 			state, err := beaconstate.InitializeFromProto(tt.state)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := precompute.ProcessSlashingsPrecompute(state, pBal); err != nil {
-				t.Fatal(err)
-			}
-
-			if state.Balances()[0] != tt.want {
-				t.Errorf(
-					"ProcessSlashings({%v}) = newState; newState.Balances[0] = %d; wanted %d",
-					original,
-					state.Balances()[0],
-					tt.want,
-				)
-			}
+			require.NoError(t, err)
+			require.NoError(t, precompute.ProcessSlashingsPrecompute(state, pBal))
+			assert.Equal(t, tt.want, state.Balances()[0], "ProcessSlashings({%v}) = newState; newState.Balances[0] = %d; wanted %d", original, state.Balances()[0])
 		})
 	}
 }

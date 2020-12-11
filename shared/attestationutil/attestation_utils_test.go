@@ -2,7 +2,6 @@ package attestationutil_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
@@ -10,6 +9,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/attestationutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestAttestingIndices(t *testing.T) {
@@ -49,9 +49,9 @@ func TestAttestingIndices(t *testing.T) {
 
 func TestIsValidAttestationIndices(t *testing.T) {
 	tests := []struct {
-		name string
-		att  *eth.IndexedAttestation
-		want string
+		name      string
+		att       *eth.IndexedAttestation
+		wantedErr string
 	}{
 		{
 			name: "Indices should be non-empty",
@@ -60,9 +60,9 @@ func TestIsValidAttestationIndices(t *testing.T) {
 				Data: &eth.AttestationData{
 					Target: &eth.Checkpoint{},
 				},
-				Signature: nil,
+				Signature: make([]byte, 96),
 			},
-			want: "expected non-empty",
+			wantedErr: "expected non-empty",
 		},
 		{
 			name: "Greater than max validators per committee",
@@ -71,9 +71,9 @@ func TestIsValidAttestationIndices(t *testing.T) {
 				Data: &eth.AttestationData{
 					Target: &eth.Checkpoint{},
 				},
-				Signature: nil,
+				Signature: make([]byte, 96),
 			},
-			want: "indices count exceeds",
+			wantedErr: "indices count exceeds",
 		},
 		{
 			name: "Needs to be sorted",
@@ -82,9 +82,9 @@ func TestIsValidAttestationIndices(t *testing.T) {
 				Data: &eth.AttestationData{
 					Target: &eth.Checkpoint{},
 				},
-				Signature: nil,
+				Signature: make([]byte, 96),
 			},
-			want: "not uniquely sorted",
+			wantedErr: "not uniquely sorted",
 		},
 		{
 			name: "Valid indices",
@@ -93,18 +93,37 @@ func TestIsValidAttestationIndices(t *testing.T) {
 				Data: &eth.AttestationData{
 					Target: &eth.Checkpoint{},
 				},
-				Signature: nil,
+				Signature: make([]byte, 96),
+			},
+		},
+		{
+			name: "Valid indices with length of 2",
+			att: &eth.IndexedAttestation{
+				AttestingIndices: []uint64{1, 2},
+				Data: &eth.AttestationData{
+					Target: &eth.Checkpoint{},
+				},
+				Signature: make([]byte, 96),
+			},
+		},
+		{
+			name: "Valid indices with length of 1",
+			att: &eth.IndexedAttestation{
+				AttestingIndices: []uint64{1},
+				Data: &eth.AttestationData{
+					Target: &eth.Checkpoint{},
+				},
+				Signature: make([]byte, 96),
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := attestationutil.IsValidAttestationIndices(context.Background(), tt.att)
-			if tt.want == "" && err != nil {
-				t.Fatal(err)
-			}
-			if tt.want != "" && !strings.Contains(err.Error(), tt.want) {
-				t.Errorf("IsValidAttestationIndices() got = %v, want %v", err, tt.want)
+			if tt.wantedErr != "" {
+				assert.ErrorContains(t, tt.wantedErr, err)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}
@@ -117,6 +136,26 @@ func BenchmarkAttestingIndices_PartialCommittee(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = attestationutil.AttestingIndices(bf, committee)
+	}
+}
+
+func BenchmarkIsValidAttestationIndices(b *testing.B) {
+	indices := make([]uint64, params.BeaconConfig().MaxValidatorsPerCommittee)
+	for i := 0; i < len(indices); i++ {
+		indices[i] = uint64(i)
+	}
+	att := &eth.IndexedAttestation{
+		AttestingIndices: indices,
+		Data: &eth.AttestationData{
+			Target: &eth.Checkpoint{},
+		},
+		Signature: make([]byte, 96),
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := attestationutil.IsValidAttestationIndices(context.Background(), att); err != nil {
+			require.NoError(b, err)
+		}
 	}
 }
 

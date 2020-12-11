@@ -79,7 +79,7 @@ func (s *Service) Start() {
 		log.Errorf("Could not listen to port in Start() %s: %v", address, err)
 	}
 	s.listener = lis
-	log.WithField("address", address).Info("RPC-API listening on port")
+	log.WithField("address", address).Info("gRPC server listening on port")
 
 	opts := []grpc.ServerOption{
 		grpc.StatsHandler(&ocgrpc.ServerHandler{}),
@@ -155,8 +155,5 @@ func (s *Service) Status() error {
 	if bs := s.beaconclient.Status(); bs != nil {
 		return bs
 	}
-	if ds := s.detector.Status(); ds != nil {
-		return ds
-	}
-	return nil
+	return s.detector.Status()
 }

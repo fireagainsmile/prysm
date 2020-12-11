@@ -6,20 +6,22 @@ import (
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	log "github.com/sirupsen/logrus"
 	bolt "go.etcd.io/bbolt"
 	"go.opencensus.io/trace"
 )
 
 // State returns the saved state using block's signing root,
 // this particular block was used to generate the state.
-func (kv *Store) State(ctx context.Context, blockRoot [32]byte) (*state.BeaconState, error) {
+func (s *Store) State(ctx context.Context, blockRoot [32]byte) (*state.BeaconState, error) {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.State")
 	defer span.End()
-	var s *pb.BeaconState
-	enc, err := kv.stateBytes(ctx, blockRoot)
+	var st *pb.BeaconState
+	enc, err := s.stateBytes(ctx, blockRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -28,53 +30,19 @@ func (kv *Store) State(ctx context.Context, blockRoot [32]byte) (*state.BeaconSt
 		return nil, nil
 	}
 
-	s, err = createState(ctx, enc)
+	st, err = createState(ctx, enc)
 	if err != nil {
 		return nil, err
 	}
-	return state.InitializeFromProtoUnsafe(s)
-}
-
-// HeadState returns the latest canonical state in beacon chain.
-func (kv *Store) HeadState(ctx context.Context) (*state.BeaconState, error) {
-	ctx, span := trace.StartSpan(ctx, "BeaconDB.HeadState")
-	defer span.End()
-	var s *pb.BeaconState
-	err := kv.db.View(func(tx *bolt.Tx) error {
-		// Retrieve head block's signing root from blocks bucket,
-		// to look up what the head state is.
-		bucket := tx.Bucket(blocksBucket)
-		headBlkRoot := bucket.Get(headBlockRootKey)
-
-		bucket = tx.Bucket(stateBucket)
-		enc := bucket.Get(headBlkRoot)
-		if enc == nil {
-			return nil
-		}
-
-		var err error
-		s, err = createState(ctx, enc)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	if s == nil {
-		return nil, nil
-	}
-	span.AddAttributes(trace.BoolAttribute("exists", s != nil))
-	if s != nil {
-		span.AddAttributes(trace.Int64Attribute("slot", int64(s.Slot)))
-	}
-	return state.InitializeFromProtoUnsafe(s)
+	return state.InitializeFromProtoUnsafe(st)
 }
 
 // GenesisState returns the genesis state in beacon chain.
-func (kv *Store) GenesisState(ctx context.Context) (*state.BeaconState, error) {
+func (s *Store) GenesisState(ctx context.Context) (*state.BeaconState, error) {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.GenesisState")
 	defer span.End()
-	var s *pb.BeaconState
-	err := kv.db.View(func(tx *bolt.Tx) error {
+	var st *pb.BeaconState
+	err := s.db.View(func(tx *bolt.Tx) error {
 		// Retrieve genesis block's signing root from blocks bucket,
 		// to look up what the genesis state is.
 		bucket := tx.Bucket(blocksBucket)
@@ -87,28 +55,28 @@ func (kv *Store) GenesisState(ctx context.Context) (*state.BeaconState, error) {
 		}
 
 		var err error
-		s, err = createState(ctx, enc)
+		st, err = createState(ctx, enc)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	if s == nil {
+	if st == nil {
 		return nil, nil
 	}
-	return state.InitializeFromProtoUnsafe(s)
+	return state.InitializeFromProtoUnsafe(st)
 }
 
 // SaveState stores a state to the db using block's signing root which was used to generate the state.
-func (kv *Store) SaveState(ctx context.Context, st *state.BeaconState, blockRoot [32]byte) error {
+func (s *Store) SaveState(ctx context.Context, st *state.BeaconState, blockRoot [32]byte) error {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.SaveState")
 	defer span.End()
 
-	return kv.SaveStates(ctx, []*state.BeaconState{st}, [][32]byte{blockRoot})
+	return s.SaveStates(ctx, []*state.BeaconState{st}, [][32]byte{blockRoot})
 }
 
 // SaveStates stores multiple states to the db using the provided corresponding roots.
-func (kv *Store) SaveStates(ctx context.Context, states []*state.BeaconState, blockRoots [][32]byte) error {
+func (s *Store) SaveStates(ctx context.Context, states []*state.BeaconState, blockRoots [][32]byte) error {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.SaveStates")
 	defer span.End()
 	if states == nil {
@@ -123,7 +91,7 @@ func (kv *Store) SaveStates(ctx context.Context, states []*state.BeaconState, bl
 		}
 	}
 
-	return kv.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(stateBucket)
 		for i, rt := range blockRoots {
 			indicesByBucket := createStateIndicesFromStateSlot(ctx, states[i].Slot())
@@ -139,10 +107,10 @@ func (kv *Store) SaveStates(ctx context.Context, states []*state.BeaconState, bl
 }
 
 // HasState checks if a state by root exists in the db.
-func (kv *Store) HasState(ctx context.Context, blockRoot [32]byte) bool {
+func (s *Store) HasState(ctx context.Context, blockRoot [32]byte) bool {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.HasState")
 	defer span.End()
-	enc, err := kv.stateBytes(ctx, blockRoot)
+	enc, err := s.stateBytes(ctx, blockRoot)
 	if err != nil {
 		panic(err)
 	}
@@ -150,28 +118,11 @@ func (kv *Store) HasState(ctx context.Context, blockRoot [32]byte) bool {
 }
 
 // DeleteState by block root.
-func (kv *Store) DeleteState(ctx context.Context, blockRoot [32]byte) error {
+func (s *Store) DeleteState(ctx context.Context, blockRoot [32]byte) error {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.DeleteState")
 	defer span.End()
-	return kv.DeleteStates(ctx, [][32]byte{blockRoot})
-}
 
-// DeleteStates by block roots.
-//
-// Note: bkt.Delete(key) uses a binary search to find the item in the database. Iterating with a
-// cursor is faster when there are a large set of keys to delete. This method is O(n) deletion where
-// n is the number of keys in the database. The alternative of calling  bkt.Delete on each key to
-// delete would be O(m*log(n)) which would be much slower given a large set of keys to delete.
-func (kv *Store) DeleteStates(ctx context.Context, blockRoots [][32]byte) error {
-	ctx, span := trace.StartSpan(ctx, "BeaconDB.DeleteStates")
-	defer span.End()
-
-	rootMap := make(map[[32]byte]bool, len(blockRoots))
-	for _, blockRoot := range blockRoots {
-		rootMap[blockRoot] = true
-	}
-
-	return kv.db.Update(func(tx *bolt.Tx) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(blocksBucket)
 		genesisBlockRoot := bkt.Get(genesisBlockRootKey)
 
@@ -187,32 +138,36 @@ func (kv *Store) DeleteStates(ctx context.Context, blockRoots [][32]byte) error 
 		blockBkt := tx.Bucket(blocksBucket)
 		headBlkRoot := blockBkt.Get(headBlockRootKey)
 		bkt = tx.Bucket(stateBucket)
-		c := bkt.Cursor()
-
-		for blockRoot, _ := c.First(); blockRoot != nil; blockRoot, _ = c.Next() {
-			if !rootMap[bytesutil.ToBytes32(blockRoot)] {
-				continue
-			}
-			// Safe guard against deleting genesis, finalized, head state.
-			if bytes.Equal(blockRoot[:], checkpoint.Root) || bytes.Equal(blockRoot[:], genesisBlockRoot) || bytes.Equal(blockRoot[:], headBlkRoot) {
-				return errors.New("cannot delete genesis, finalized, or head state")
-			}
-
-			slot, err := slotByBlockRoot(ctx, tx, blockRoot)
-			if err != nil {
-				return err
-			}
-			indicesByBucket := createStateIndicesFromStateSlot(ctx, slot)
-			if err := deleteValueForIndices(ctx, indicesByBucket, blockRoot[:], tx); err != nil {
-				return errors.Wrap(err, "could not delete root for DB indices")
-			}
-
-			if err := c.Delete(); err != nil {
-				return err
-			}
+		// Safe guard against deleting genesis, finalized, head state.
+		if bytes.Equal(blockRoot[:], checkpoint.Root) || bytes.Equal(blockRoot[:], genesisBlockRoot) || bytes.Equal(blockRoot[:], headBlkRoot) {
+			return errors.New("cannot delete genesis, finalized, or head state")
 		}
-		return nil
+
+		slot, err := slotByBlockRoot(ctx, tx, blockRoot[:])
+		if err != nil {
+			return err
+		}
+		indicesByBucket := createStateIndicesFromStateSlot(ctx, slot)
+		if err := deleteValueForIndices(ctx, indicesByBucket, blockRoot[:], tx); err != nil {
+			return errors.Wrap(err, "could not delete root for DB indices")
+		}
+
+		return bkt.Delete(blockRoot[:])
 	})
+}
+
+// DeleteStates by block roots.
+func (s *Store) DeleteStates(ctx context.Context, blockRoots [][32]byte) error {
+	ctx, span := trace.StartSpan(ctx, "BeaconDB.DeleteStates")
+	defer span.End()
+
+	for _, r := range blockRoots {
+		if err := s.DeleteState(ctx, r); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // creates state from marshaled proto state bytes.
@@ -225,11 +180,11 @@ func createState(ctx context.Context, enc []byte) (*pb.BeaconState, error) {
 }
 
 // HasState checks if a state by root exists in the db.
-func (kv *Store) stateBytes(ctx context.Context, blockRoot [32]byte) ([]byte, error) {
+func (s *Store) stateBytes(ctx context.Context, blockRoot [32]byte) ([]byte, error) {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.stateBytes")
 	defer span.End()
 	var dst []byte
-	err := kv.db.View(func(tx *bolt.Tx) error {
+	err := s.db.View(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(stateBucket)
 		dst = bkt.Get(blockRoot[:])
 		return nil
@@ -287,15 +242,18 @@ func slotByBlockRoot(ctx context.Context, tx *bolt.Tx, blockRoot []byte) (uint64
 // from the db. Ideally there should just be one state per slot, but given validator
 // can double propose, a single slot could have multiple block roots and
 // results states. This returns a list of states.
-func (kv *Store) HighestSlotStatesBelow(ctx context.Context, slot uint64) ([]*state.BeaconState, error) {
+func (s *Store) HighestSlotStatesBelow(ctx context.Context, slot uint64) ([]*state.BeaconState, error) {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.HighestSlotStatesBelow")
 	defer span.End()
 
 	var best []byte
-	if err := kv.db.View(func(tx *bolt.Tx) error {
+	if err := s.db.View(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(stateSlotIndicesBucket)
 		c := bkt.Cursor()
 		for s, root := c.First(); s != nil; s, root = c.Next() {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			key := bytesutil.BytesToUint64BigEndian(s)
 			if root == nil {
 				continue
@@ -313,13 +271,13 @@ func (kv *Store) HighestSlotStatesBelow(ctx context.Context, slot uint64) ([]*st
 	var st *state.BeaconState
 	var err error
 	if best != nil {
-		st, err = kv.State(ctx, bytesutil.ToBytes32(best))
+		st, err = s.State(ctx, bytesutil.ToBytes32(best))
 		if err != nil {
 			return nil, err
 		}
 	}
 	if st == nil {
-		st, err = kv.GenesisState(ctx)
+		st, err = s.GenesisState(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -348,4 +306,62 @@ func createStateIndicesFromStateSlot(ctx context.Context, slot uint64) map[strin
 		indicesByBucket[string(buckets[i])] = indices[i]
 	}
 	return indicesByBucket
+}
+
+// CleanUpDirtyStates removes states in DB that falls to under archived point interval rules.
+// Only following states would be kept:
+// 1.) state_slot % archived_interval == 0. (e.g. archived_interval=2048, states with slot 2048, 4096... etc)
+// 2.) archived_interval - archived_interval/3 < state_slot % archived_interval
+//   (e.g. archived_interval=2048, states with slots after 1365).
+//   This is to tolerate skip slots. Not every state lays on the boundary.
+// 3.) state with current finalized root
+// 4.) unfinalized States
+func (s *Store) CleanUpDirtyStates(ctx context.Context, slotsPerArchivedPoint uint64) error {
+	ctx, span := trace.StartSpan(ctx, "BeaconDB. CleanUpDirtyStates")
+	defer span.End()
+
+	f, err := s.FinalizedCheckpoint(ctx)
+	if err != nil {
+		return err
+	}
+	finalizedSlot, err := helpers.StartSlot(f.Epoch)
+	if err != nil {
+		return err
+	}
+	deletedRoots := make([][32]byte, 0)
+
+	err = s.db.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket(stateSlotIndicesBucket)
+		return bkt.ForEach(func(k, v []byte) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+
+			finalizedChkpt := bytesutil.ToBytes32(f.Root) == bytesutil.ToBytes32(v)
+			slot := bytesutil.BytesToUint64BigEndian(k)
+			mod := slot % slotsPerArchivedPoint
+			nonFinalized := slot > finalizedSlot
+
+			// The following conditions cover 1, 2, 3 and 4 above.
+			if mod != 0 && mod <= slotsPerArchivedPoint-slotsPerArchivedPoint/3 && !finalizedChkpt && !nonFinalized {
+				deletedRoots = append(deletedRoots, bytesutil.ToBytes32(v))
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return err
+	}
+
+	// Length of to be deleted roots is 0. Nothing to do.
+	if len(deletedRoots) == 0 {
+		return nil
+	}
+
+	log.WithField("count", len(deletedRoots)).Info("Cleaning up dirty states")
+	if err := s.DeleteStates(ctx, deletedRoots); err != nil {
+		return err
+	}
+
+	return err
 }

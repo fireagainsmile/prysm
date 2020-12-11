@@ -5,25 +5,25 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"testing"
 
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
-	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/cmd"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	logTest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/urfave/cli/v2"
 )
 
 // Ensure BeaconNode implements interfaces.
-var _ = statefeed.Notifier(&BeaconNode{})
+var _ statefeed.Notifier = (*BeaconNode)(nil)
 
 // Test that beacon chain node can close.
 func TestNodeClose_OK(t *testing.T) {
 	hook := logTest.NewGlobal()
 
-	tmp := fmt.Sprintf("%s/datadirtest2", testutil.TempDir())
-	if err := os.RemoveAll(tmp); err != nil {
-		t.Log(err)
-	}
+	tmp := fmt.Sprintf("%s/datadirtest2", t.TempDir())
 
 	app := cli.App{}
 	set := flag.NewFlagSet("test", 0)
@@ -36,29 +36,17 @@ func TestNodeClose_OK(t *testing.T) {
 	context := cli.NewContext(&app, set, nil)
 
 	node, err := NewBeaconNode(context)
-	if err != nil {
-		t.Fatalf("Failed to create BeaconNode: %v", err)
-	}
+	require.NoError(t, err)
 
 	node.Close()
 
-	testutil.AssertLogsContain(t, hook, "Stopping beacon node")
-
-	if err := os.RemoveAll(tmp); err != nil {
-		t.Log(err)
-	}
+	require.LogsContain(t, hook, "Stopping beacon node")
+	require.NoError(t, os.RemoveAll(tmp))
 }
 
 func TestBootStrapNodeFile(t *testing.T) {
-	file, err := ioutil.TempFile(testutil.TempDir(), "bootstrapFile")
-	if err != nil {
-		t.Fatalf("Error in TempFile call:  %v", err)
-	}
-	defer func() {
-		if err := os.Remove(file.Name()); err != nil {
-			t.Log(err)
-		}
-	}()
+	file, err := ioutil.TempFile(t.TempDir(), "bootstrapFile")
+	require.NoError(t, err)
 
 	sampleNode0 := "- enr:-Ku4QMKVC_MowDsmEa20d5uGjrChI0h8_KsKXDmgVQbIbngZV0i" +
 		"dV6_RL7fEtZGo-kTNZ5o7_EJI_vCPJ6scrhwX0Z4Bh2F0dG5ldHOIAAAAAAAAAACEZXRoMpD" +
@@ -67,15 +55,29 @@ func TestBootStrapNodeFile(t *testing.T) {
 	sampleNode1 := "- enr:-TESTNODE2"
 	sampleNode2 := "- enr:-TESTNODE3"
 	err = ioutil.WriteFile(file.Name(), []byte(sampleNode0+"\n"+sampleNode1+"\n"+sampleNode2), 0644)
-	if err != nil {
-		t.Fatalf("Error in WriteFile call:  %v", err)
-	}
+	require.NoError(t, err, "Error in WriteFile call")
 	nodeList, err := readbootNodes(file.Name())
-	if err != nil {
-		t.Fatalf("Error in readbootNodes call:  %v", err)
-	}
-	if nodeList[0] != sampleNode0[2:] || nodeList[1] != sampleNode1[2:] || nodeList[2] != sampleNode2[2:] {
-		// nodeList's YAML parsing will have removed the leading "- "
-		t.Fatalf("TestBootStrapNodeFile failed.  Nodes do not match")
-	}
+	require.NoError(t, err, "Error in readbootNodes call")
+	assert.Equal(t, sampleNode0[2:], nodeList[0], "Unexpected nodes")
+	assert.Equal(t, sampleNode1[2:], nodeList[1], "Unexpected nodes")
+	assert.Equal(t, sampleNode2[2:], nodeList[2], "Unexpected nodes")
+}
+
+// TestClearDB tests clearing the database
+func TestClearDB(t *testing.T) {
+	hook := logTest.NewGlobal()
+
+	tmp := filepath.Join(t.TempDir(), "datadirtest")
+
+	app := cli.App{}
+	set := flag.NewFlagSet("test", 0)
+	set.String("datadir", tmp, "node data directory")
+	set.Bool(cmd.ForceClearDB.Name, true, "force clear db")
+
+	context := cli.NewContext(&app, set, nil)
+	_, err := NewBeaconNode(context)
+	require.NoError(t, err)
+
+	require.LogsContain(t, hook, "Removing database")
+	require.NoError(t, os.RemoveAll(tmp))
 }

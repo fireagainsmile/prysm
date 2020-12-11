@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/prysmaticlabs/prysm/shared/params"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	v "github.com/prysmaticlabs/prysm/beacon-chain/core/validators"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
-	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
 // ProcessProposerSlashings is one of the operations performed
@@ -36,10 +37,15 @@ import (
 //
 //    slash_validator(state, proposer_slashing.proposer_index)
 func ProcessProposerSlashings(
-	ctx context.Context,
+	_ context.Context,
 	beaconState *stateTrie.BeaconState,
-	body *ethpb.BeaconBlockBody,
+	b *ethpb.SignedBeaconBlock,
 ) (*stateTrie.BeaconState, error) {
+	if b.Block == nil || b.Block.Body == nil {
+		return nil, errors.New("block and block body can't be nil")
+	}
+
+	body := b.Block.Body
 	var err error
 	for idx, slashing := range body.ProposerSlashings {
 		if slashing == nil {
@@ -74,14 +80,14 @@ func VerifyProposerSlashing(
 	if pIdx != slashing.Header_2.Header.ProposerIndex {
 		return fmt.Errorf("mismatched indices, received %d == %d", slashing.Header_1.Header.ProposerIndex, slashing.Header_2.Header.ProposerIndex)
 	}
-	if proto.Equal(slashing.Header_1, slashing.Header_2) {
+	if proto.Equal(slashing.Header_1.Header, slashing.Header_2.Header) {
 		return errors.New("expected slashing headers to differ")
 	}
 	proposer, err := beaconState.ValidatorAtIndexReadOnly(slashing.Header_1.Header.ProposerIndex)
 	if err != nil {
 		return err
 	}
-	if !helpers.IsSlashableValidatorUsingTrie(proposer, helpers.SlotToEpoch(beaconState.Slot())) {
+	if !helpers.IsSlashableValidatorUsingTrie(proposer, helpers.CurrentEpoch(beaconState)) {
 		return fmt.Errorf("validator with key %#x is not slashable", proposer.PublicKey())
 	}
 	headers := []*ethpb.SignedBeaconBlockHeader{slashing.Header_1, slashing.Header_2}
@@ -91,6 +97,5 @@ func VerifyProposerSlashing(
 			return errors.Wrap(err, "could not verify beacon block header")
 		}
 	}
-
 	return nil
 }

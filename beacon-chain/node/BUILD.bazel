@@ -3,7 +3,10 @@ load("@io_bazel_rules_go//go:def.bzl", "go_test")
 
 go_library(
     name = "go_default_library",
-    srcs = ["node.go"],
+    srcs = [
+        "helper.go",
+        "node.go",
+    ],
     importpath = "github.com/prysmaticlabs/prysm/beacon-chain/node",
     visibility = ["//beacon-chain:__subpackages__"],
     deps = [
@@ -26,11 +29,13 @@ go_library(
         "//beacon-chain/sync:go_default_library",
         "//beacon-chain/sync/initial-sync:go_default_library",
         "//shared:go_default_library",
+        "//shared/backuputil:go_default_library",
         "//shared/cmd:go_default_library",
         "//shared/debug:go_default_library",
         "//shared/event:go_default_library",
         "//shared/featureconfig:go_default_library",
         "//shared/params:go_default_library",
+        "//shared/prereq:go_default_library",
         "//shared/prometheus:go_default_library",
         "//shared/sliceutil:go_default_library",
         "//shared/tracing:go_default_library",
@@ -46,11 +51,16 @@ go_library(
 go_test(
     name = "go_default_test",
     size = "small",
-    srcs = ["node_test.go"],
+    srcs = [
+        "helper_test.go",
+        "node_test.go",
+    ],
     embed = [":go_default_library"],
     deps = [
         "//beacon-chain/core/feed/state:go_default_library",
-        "//shared/testutil:go_default_library",
+        "//shared/cmd:go_default_library",
+        "//shared/testutil/assert:go_default_library",
+        "//shared/testutil/require:go_default_library",
         "@com_github_sirupsen_logrus//hooks/test:go_default_library",
         "@com_github_urfave_cli_v2//:go_default_library",
     ],

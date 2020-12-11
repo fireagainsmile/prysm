@@ -6,15 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"strconv"
 
 	"github.com/bazelbuild/rules_go/go/tools/bazel"
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// Params struct defines the parameters needed for running E2E tests to properly handle test sharding.
-type Params struct {
+// params struct defines the parameters needed for running E2E tests to properly handle test sharding.
+type params struct {
 	TestPath              string
 	LogPath               string
 	TestShardIndex        int
@@ -25,12 +25,13 @@ type Params struct {
 	BeaconNodeRPCPort     int
 	BeaconNodeMetricsPort int
 	ValidatorMetricsPort  int
+	ValidatorGatewayPort  int
 	SlasherRPCPort        int
 	SlasherMetricsPort    int
 }
 
 // TestParams is the globally accessible var for getting config elements.
-var TestParams *Params
+var TestParams *params
 
 // BootNodeLogFileName is the file name used for the beacon chain node logs.
 var BootNodeLogFileName = "bootnode.log"
@@ -65,9 +66,10 @@ func Init(beaconNodeCount int) error {
 	if err != nil {
 		return err
 	}
+	testPath = filepath.Join(testPath, fmt.Sprintf("shard-%d", testIndex))
 
-	TestParams = &Params{
-		TestPath:              path.Join(testPath, fmt.Sprintf("shard-%d", testIndex)),
+	TestParams = &params{
+		TestPath:              testPath,
 		LogPath:               logPath,
 		TestShardIndex:        testIndex,
 		BeaconNodeCount:       beaconNodeCount,
@@ -76,6 +78,7 @@ func Init(beaconNodeCount int) error {
 		BeaconNodeRPCPort:     4150 + testIndex*100,
 		BeaconNodeMetricsPort: 5100 + testIndex*100,
 		ValidatorMetricsPort:  6100 + testIndex*100,
+		ValidatorGatewayPort:  7150 + testIndex*100,
 		SlasherRPCPort:        7100 + testIndex*100,
 		SlasherMetricsPort:    8100 + testIndex*100,
 	}

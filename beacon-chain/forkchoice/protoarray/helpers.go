@@ -13,8 +13,7 @@ func computeDeltas(
 	ctx context.Context,
 	blockIndices map[[32]byte]uint64,
 	votes []Vote,
-	oldBalances []uint64,
-	newBalances []uint64,
+	oldBalances, newBalances []uint64,
 ) ([]int, []Vote, error) {
 	ctx, span := trace.StartSpan(ctx, "protoArrayForkChoice.computeDeltas")
 	defer span.End()
@@ -78,16 +77,16 @@ func copyNode(node *Node) *Node {
 	}
 
 	copiedRoot := [32]byte{}
-	copy(copiedRoot[:], node.Root[:])
+	copy(copiedRoot[:], node.root[:])
 
 	return &Node{
-		Slot:           node.Slot,
-		Root:           copiedRoot,
-		Parent:         node.Parent,
-		JustifiedEpoch: node.JustifiedEpoch,
-		FinalizedEpoch: node.FinalizedEpoch,
-		Weight:         node.Weight,
-		BestChild:      node.BestChild,
-		BestDescendant: node.BestDescendant,
+		slot:           node.slot,
+		root:           copiedRoot,
+		parent:         node.parent,
+		justifiedEpoch: node.justifiedEpoch,
+		finalizedEpoch: node.finalizedEpoch,
+		weight:         node.weight,
+		bestChild:      node.bestChild,
+		bestDescendant: node.bestDescendant,
 	}
 }

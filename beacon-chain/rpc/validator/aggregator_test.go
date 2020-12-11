@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-bitfield"
@@ -58,7 +59,8 @@ func TestSubmitAggregateAndProof_CantFindValidatorIndex(t *testing.T) {
 		BeaconDB:    db,
 	}
 
-	priv := bls.RandKey()
+	priv, err := bls.RandKey()
+	require.NoError(t, err)
 	sig := priv.Sign([]byte{'A'})
 	req := &ethpb.AggregateSelectionRequest{CommitteeIndex: 1, SlotSignature: sig.Marshal(), PublicKey: pubKey(3)}
 	wanted := "Could not locate validator index in DB"
@@ -86,7 +88,8 @@ func TestSubmitAggregateAndProof_IsAggregatorAndNoAtts(t *testing.T) {
 		AttPool:     attestations.NewPool(),
 	}
 
-	priv := bls.RandKey()
+	priv, err := bls.RandKey()
+	require.NoError(t, err)
 	sig := priv.Sign([]byte{'A'})
 	v, err := s.ValidatorAtIndex(1)
 	require.NoError(t, err)
@@ -120,7 +123,8 @@ func TestSubmitAggregateAndProof_UnaggregateOk(t *testing.T) {
 		P2P:         &mockp2p.MockBroadcaster{},
 	}
 
-	priv := bls.RandKey()
+	priv, err := bls.RandKey()
+	require.NoError(t, err)
 	sig := priv.Sign([]byte{'B'})
 	v, err := beaconState.ValidatorAtIndex(1)
 	require.NoError(t, err)
@@ -158,7 +162,8 @@ func TestSubmitAggregateAndProof_AggregateOk(t *testing.T) {
 		P2P:         &mockp2p.MockBroadcaster{},
 	}
 
-	priv := bls.RandKey()
+	priv, err := bls.RandKey()
+	require.NoError(t, err)
 	sig := priv.Sign([]byte{'B'})
 	v, err := beaconState.ValidatorAtIndex(1)
 	require.NoError(t, err)
@@ -198,7 +203,8 @@ func TestSubmitAggregateAndProof_AggregateNotOk(t *testing.T) {
 		P2P:         &mockp2p.MockBroadcaster{},
 	}
 
-	priv := bls.RandKey()
+	priv, err := bls.RandKey()
+	require.NoError(t, err)
 	sig := priv.Sign([]byte{'B'})
 	v, err := beaconState.ValidatorAtIndex(1)
 	require.NoError(t, err)
@@ -218,11 +224,13 @@ func generateAtt(state *beaconstate.BeaconState, index uint64, privKeys []bls.Se
 	aggBits.SetBitAt(index+1, true)
 	att := &ethpb.Attestation{
 		Data: &ethpb.AttestationData{
-			CommitteeIndex: 1,
-			Source:         &ethpb.Checkpoint{Epoch: 0, Root: params.BeaconConfig().ZeroHash[:]},
-			Target:         &ethpb.Checkpoint{Epoch: 0},
+			CommitteeIndex:  1,
+			Source:          &ethpb.Checkpoint{Epoch: 0, Root: params.BeaconConfig().ZeroHash[:]},
+			Target:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+			BeaconBlockRoot: make([]byte, 32),
 		},
 		AggregationBits: aggBits,
+		Signature:       make([]byte, 96),
 	}
 	committee, err := helpers.BeaconCommitteeFromState(state, att.Data.Slot, att.Data.CommitteeIndex)
 	if err != nil {
@@ -246,7 +254,7 @@ func generateAtt(state *beaconstate.BeaconState, index uint64, privKeys []bls.Se
 		sigs[i] = sig
 	}
 
-	att.Signature = bls.AggregateSignatures(sigs).Marshal()[:]
+	att.Signature = bls.AggregateSignatures(sigs).Marshal()
 
 	return att, nil
 }
@@ -256,11 +264,13 @@ func generateUnaggregatedAtt(state *beaconstate.BeaconState, index uint64, privK
 	aggBits.SetBitAt(index, true)
 	att := &ethpb.Attestation{
 		Data: &ethpb.AttestationData{
-			CommitteeIndex: 1,
-			Source:         &ethpb.Checkpoint{Epoch: 0, Root: params.BeaconConfig().ZeroHash[:]},
-			Target:         &ethpb.Checkpoint{Epoch: 0},
+			CommitteeIndex:  1,
+			Source:          &ethpb.Checkpoint{Epoch: 0, Root: params.BeaconConfig().ZeroHash[:]},
+			Target:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+			BeaconBlockRoot: make([]byte, 32),
 		},
 		AggregationBits: aggBits,
+		Signature:       make([]byte, 96),
 	}
 	committee, err := helpers.BeaconCommitteeFromState(state, att.Data.Slot, att.Data.CommitteeIndex)
 	if err != nil {
@@ -285,7 +295,7 @@ func generateUnaggregatedAtt(state *beaconstate.BeaconState, index uint64, privK
 		sigs[i] = sig
 	}
 
-	att.Signature = bls.AggregateSignatures(sigs).Marshal()[:]
+	att.Signature = bls.AggregateSignatures(sigs).Marshal()
 
 	return att, nil
 }
@@ -327,7 +337,8 @@ func TestSubmitAggregateAndProof_PreferOwnAttestation(t *testing.T) {
 		P2P:         &mockp2p.MockBroadcaster{},
 	}
 
-	priv := bls.RandKey()
+	priv, err := bls.RandKey()
+	require.NoError(t, err)
 	sig := priv.Sign([]byte{'B'})
 	v, err := beaconState.ValidatorAtIndex(1)
 	require.NoError(t, err)
@@ -378,7 +389,8 @@ func TestSubmitAggregateAndProof_SelectsMostBitsWhenOwnAttestationNotPresent(t *
 		P2P:         &mockp2p.MockBroadcaster{},
 	}
 
-	priv := bls.RandKey()
+	priv, err := bls.RandKey()
+	require.NoError(t, err)
 	sig := priv.Sign([]byte{'B'})
 	v, err := beaconState.ValidatorAtIndex(1)
 	require.NoError(t, err)
@@ -394,4 +406,52 @@ func TestSubmitAggregateAndProof_SelectsMostBitsWhenOwnAttestationNotPresent(t *
 	res, err := aggregatorServer.SubmitAggregateSelectionProof(ctx, req)
 	require.NoError(t, err)
 	assert.DeepEqual(t, att1, res.AggregateAndProof.Aggregate, "Did not receive wanted attestation")
+}
+
+func TestSubmitSignedAggregateSelectionProof_ZeroHashesSignatures(t *testing.T) {
+	aggregatorServer := &Server{}
+	req := &ethpb.SignedAggregateSubmitRequest{
+		SignedAggregateAndProof: &ethpb.SignedAggregateAttestationAndProof{
+			Signature: make([]byte, params.BeaconConfig().BLSSignatureLength),
+			Message: &ethpb.AggregateAttestationAndProof{
+				Aggregate: &ethpb.Attestation{
+					Data: &ethpb.AttestationData{},
+				},
+			},
+		},
+	}
+	_, err := aggregatorServer.SubmitSignedAggregateSelectionProof(context.Background(), req)
+	require.ErrorContains(t, "Signed signatures can't be zero hashes", err)
+
+	req = &ethpb.SignedAggregateSubmitRequest{
+		SignedAggregateAndProof: &ethpb.SignedAggregateAttestationAndProof{
+			Signature: []byte{'a'},
+			Message: &ethpb.AggregateAttestationAndProof{
+				Aggregate: &ethpb.Attestation{
+					Data: &ethpb.AttestationData{},
+				},
+				SelectionProof: make([]byte, params.BeaconConfig().BLSSignatureLength),
+			},
+		},
+	}
+	_, err = aggregatorServer.SubmitSignedAggregateSelectionProof(context.Background(), req)
+	require.ErrorContains(t, "Signed signatures can't be zero hashes", err)
+}
+
+func TestSubmitSignedAggregateSelectionProof_InvalidSlot(t *testing.T) {
+	c := &mock.ChainService{Genesis: time.Now()}
+	aggregatorServer := &Server{GenesisTimeFetcher: c}
+	req := &ethpb.SignedAggregateSubmitRequest{
+		SignedAggregateAndProof: &ethpb.SignedAggregateAttestationAndProof{
+			Signature: []byte{'a'},
+			Message: &ethpb.AggregateAttestationAndProof{
+				SelectionProof: []byte{'a'},
+				Aggregate: &ethpb.Attestation{
+					Data: &ethpb.AttestationData{Slot: 1000},
+				},
+			},
+		},
+	}
+	_, err := aggregatorServer.SubmitSignedAggregateSelectionProof(context.Background(), req)
+	require.ErrorContains(t, "Attestation slot is no longer valid from current time", err)
 }

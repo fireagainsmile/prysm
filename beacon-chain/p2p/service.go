@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/ristretto"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/gogo/protobuf/proto"
@@ -23,6 +22,10 @@ import (
 	filter "github.com/multiformats/go-multiaddr"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/peers/scorers"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
+	"go.opencensus.io/trace"
+
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/encoder"
@@ -34,7 +37,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/slotutil"
 )
 
-var _ = shared.Service(&Service{})
+var _ shared.Service = (*Service)(nil)
 
 // In the event that we are at our peer limit, we
 // stop looking for new peers and instead poll
@@ -51,16 +54,14 @@ const lookupLimit = 15
 // maxBadResponses is the maximum number of bad responses from a peer before we stop talking to it.
 const maxBadResponses = 5
 
-// Exclusion list cache config values.
-const cacheNumCounters, cacheMaxCost, cacheBufferItems = 1000, 1000, 64
-
 // maxDialTimeout is the timeout for a single peer dial.
-const maxDialTimeout = 30 * time.Second
+var maxDialTimeout = params.BeaconNetworkConfig().RespTimeout
 
 // Service for managing peer to peer (p2p) networking.
 type Service struct {
 	started               bool
 	isPreGenesis          bool
+	currentForkDigest     [4]byte
 	pingMethod            func(ctx context.Context, id peer.ID) error
 	cancel                context.CancelFunc
 	cfg                   *Config
@@ -68,11 +69,13 @@ type Service struct {
 	addrFilter            *filter.Filters
 	ipLimiter             *leakybucket.Collector
 	privKey               *ecdsa.PrivateKey
-	exclusionList         *ristretto.Cache
 	metaData              *pb.MetaData
 	pubsub                *pubsub.PubSub
 	joinedTopics          map[string]*pubsub.Topic
 	joinedTopicsLock      sync.Mutex
+	subnetsLock           map[uint64]*sync.RWMutex
+	subnetsLockLock       sync.Mutex // Lock access to subnetsLock
+	initializationLock    sync.Mutex
 	dv5Listener           Listener
 	startupErr            error
 	stateNotifier         statefeed.Notifier
@@ -84,27 +87,19 @@ type Service struct {
 
 // NewService initializes a new p2p service compatible with shared.Service interface. No
 // connections are made until the Start function is called during the service registry startup.
-func NewService(cfg *Config) (*Service, error) {
+func NewService(ctx context.Context, cfg *Config) (*Service, error) {
 	var err error
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	_ = cancel // govet fix for lost cancel. Cancel is handled in service.Stop().
-	cache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: cacheNumCounters,
-		MaxCost:     cacheMaxCost,
-		BufferItems: cacheBufferItems,
-	})
-	if err != nil {
-		return nil, err
-	}
 
 	s := &Service{
 		ctx:           ctx,
 		stateNotifier: cfg.StateNotifier,
 		cancel:        cancel,
 		cfg:           cfg,
-		exclusionList: cache,
 		isPreGenesis:  true,
 		joinedTopics:  make(map[string]*pubsub.Topic, len(GossipTopicMappings)),
+		subnetsLock:   make(map[uint64]*sync.RWMutex),
 	}
 
 	dv5Nodes := parseBootStrapAddrs(s.cfg.BootstrapNodeAddr)
@@ -143,9 +138,18 @@ func NewService(cfg *Config) (*Service, error) {
 	// account previously added peers when creating the gossipsub
 	// object.
 	psOpts := []pubsub.Option{
-		pubsub.WithMessageSigning(false),
-		pubsub.WithStrictSignatureVerification(false),
+		pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign),
+		pubsub.WithNoAuthor(),
 		pubsub.WithMessageIdFn(msgIDFunction),
+		pubsub.WithSubscriptionFilter(s),
+		pubsub.WithPeerOutboundQueueSize(256),
+	}
+	// Add gossip scoring options.
+	if featureconfig.Get().EnablePeerScorer {
+		psOpts = append(
+			psOpts,
+			pubsub.WithPeerScore(peerScoringParams()),
+			pubsub.WithPeerScoreInspect(s.peerInspector, time.Minute))
 	}
 	// Set the pubsub global parameters that we require.
 	setPubSubParameters()
@@ -159,10 +163,9 @@ func NewService(cfg *Config) (*Service, error) {
 
 	s.peers = peers.NewStatus(ctx, &peers.StatusConfig{
 		PeerLimit: int(s.cfg.MaxPeers),
-		ScorerParams: &peers.PeerScorerConfig{
-			BadResponsesScorerConfig: &peers.BadResponsesScorerConfig{
+		ScorerParams: &scorers.Config{
+			BadResponsesScorerConfig: &scorers.BadResponsesScorerConfig{
 				Threshold:     maxBadResponses,
-				Weight:        -100,
 				DecayInterval: time.Hour,
 			},
 		},
@@ -352,7 +355,7 @@ func (s *Service) pingPeers() {
 	for _, pid := range s.peers.Connected() {
 		go func(id peer.ID) {
 			if err := s.pingMethod(s.ctx, id); err != nil {
-				log.WithField("peer", id).WithError(err).Error("Failed to ping peer")
+				log.WithField("peer", id).WithError(err).Debug("Failed to ping peer")
 			}
 		}(pid)
 	}
@@ -362,21 +365,39 @@ func (s *Service) pingPeers() {
 // for initializing the p2p service as p2p needs to be aware
 // of genesis information for peering.
 func (s *Service) awaitStateInitialized() {
+	s.initializationLock.Lock()
+	defer s.initializationLock.Unlock()
+
+	if s.isInitialized() {
+		return
+	}
+
 	stateChannel := make(chan *feed.Event, 1)
 	stateSub := s.stateNotifier.StateFeed().Subscribe(stateChannel)
-	defer stateSub.Unsubscribe()
+	cleanup := stateSub.Unsubscribe
+	defer cleanup()
 	for {
 		select {
 		case event := <-stateChannel:
 			if event.Type == statefeed.Initialized {
 				data, ok := event.Data.(*statefeed.InitializedData)
 				if !ok {
+					// log.Fatalf will prevent defer from being called
+					cleanup()
 					log.Fatalf("Received wrong data over state initialized feed: %v", data)
 				}
 				s.genesisTime = data.StartTime
 				s.genesisValidatorsRoot = data.GenesisValidatorsRoot
+				_, err := s.forkDigest() // initialize fork digest cache
+				if err != nil {
+					log.WithError(err).Error("Could not initialize fork digest")
+				}
+
 				return
 			}
+		case <-s.ctx.Done():
+			log.Debug("Context closed, exiting goroutine")
+			return
 		}
 	}
 }
@@ -390,21 +411,24 @@ func (s *Service) connectWithAllPeers(multiAddrs []ma.Multiaddr) {
 	for _, info := range addrInfos {
 		// make each dial non-blocking
 		go func(info peer.AddrInfo) {
-			if err := s.connectWithPeer(info); err != nil {
+			if err := s.connectWithPeer(s.ctx, info); err != nil {
 				log.WithError(err).Tracef("Could not connect with peer %s", info.String())
 			}
 		}(info)
 	}
 }
 
-func (s *Service) connectWithPeer(info peer.AddrInfo) error {
+func (s *Service) connectWithPeer(ctx context.Context, info peer.AddrInfo) error {
+	ctx, span := trace.StartSpan(ctx, "p2p.connectWithPeer")
+	defer span.End()
+
 	if info.ID == s.host.ID() {
 		return nil
 	}
 	if s.Peers().IsBad(info.ID) {
-		return nil
+		return errors.New("refused to connect to bad peer")
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, maxDialTimeout)
+	ctx, cancel := context.WithTimeout(ctx, maxDialTimeout)
 	defer cancel()
 	if err := s.host.Connect(ctx, info); err != nil {
 		s.Peers().Scorers().BadResponsesScorer().Increment(info.ID)
@@ -432,4 +456,10 @@ func (s *Service) connectToBootnodes() error {
 	multiAddresses := convertToMultiAddr(nodes)
 	s.connectWithAllPeers(multiAddresses)
 	return nil
+}
+
+// Returns true if the service is aware of the genesis time and genesis validator root. This is
+// required for discovery and pubsub validation.
+func (s *Service) isInitialized() bool {
+	return !s.genesisTime.IsZero() && len(s.genesisValidatorsRoot) == 32
 }

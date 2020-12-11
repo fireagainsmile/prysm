@@ -12,7 +12,6 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed/operation"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db/filters"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	attaggregation "github.com/prysmaticlabs/prysm/shared/aggregation/attestations"
 	"github.com/prysmaticlabs/prysm/shared/attestationutil"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
@@ -65,12 +64,12 @@ func (bs *Server) ListAttestations(
 	var err error
 	switch q := req.QueryFilter.(type) {
 	case *ethpb.ListAttestationsRequest_GenesisEpoch:
-		blocks, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(0).SetEndEpoch(0))
+		blocks, _, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(0).SetEndEpoch(0))
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not fetch attestations: %v", err)
 		}
 	case *ethpb.ListAttestationsRequest_Epoch:
-		blocks, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(q.Epoch).SetEndEpoch(q.Epoch))
+		blocks, _, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(q.Epoch).SetEndEpoch(q.Epoch))
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not fetch attestations: %v", err)
 		}
@@ -115,16 +114,16 @@ func (bs *Server) ListAttestations(
 func (bs *Server) ListIndexedAttestations(
 	ctx context.Context, req *ethpb.ListIndexedAttestationsRequest,
 ) (*ethpb.ListIndexedAttestationsResponse, error) {
-	blocks := make([]*ethpb.SignedBeaconBlock, 0)
+	var blocks []*ethpb.SignedBeaconBlock
 	var err error
 	switch q := req.QueryFilter.(type) {
 	case *ethpb.ListIndexedAttestationsRequest_GenesisEpoch:
-		blocks, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(0).SetEndEpoch(0))
+		blocks, _, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(0).SetEndEpoch(0))
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not fetch attestations: %v", err)
 		}
 	case *ethpb.ListIndexedAttestationsRequest_Epoch:
-		blocks, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(q.Epoch).SetEndEpoch(q.Epoch))
+		blocks, _, err = bs.BeaconDB.Blocks(ctx, filters.NewFilter().SetStartEpoch(q.Epoch).SetEndEpoch(q.Epoch))
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not fetch attestations: %v", err)
 		}
@@ -266,7 +265,7 @@ func (bs *Server) StreamIndexedAttestations(
 				}
 				if data.Attestation == nil || data.Attestation.Aggregate == nil {
 					// One nil attestation shouldn't stop the stream.
-					log.Info("Indexed attestations stream got nil attestation or nil attestation aggregate")
+					log.Debug("Indexed attestations stream got nil attestation or nil attestation aggregate")
 					continue
 				}
 				bs.ReceivedAttestationsBuffer <- data.Attestation.Aggregate
@@ -296,7 +295,11 @@ func (bs *Server) StreamIndexedAttestations(
 			}
 			// We use the retrieved committees for the epoch to convert all attestations
 			// into indexed form effectively.
-			startSlot := helpers.StartSlot(targetEpoch)
+			startSlot, err := helpers.StartSlot(targetEpoch)
+			if err != nil {
+				log.Error(err)
+				continue
+			}
 			endSlot := startSlot + params.BeaconConfig().SlotsPerEpoch
 			for _, att := range aggAtts {
 				// Out of range check, the attestation slot cannot be greater
@@ -331,13 +334,13 @@ func (bs *Server) collectReceivedAttestations(ctx context.Context) {
 	ticker := slotutil.GetSlotTickerWithOffset(bs.GenesisTimeFetcher.GenesisTime(), twoThirdsASlot, params.BeaconConfig().SecondsPerSlot)
 	for {
 		select {
-		case _ = <-ticker.C():
+		case <-ticker.C():
 			aggregatedAttsByTarget := make(map[[32]byte][]*ethpb.Attestation)
 			for root, atts := range attsByRoot {
 				// We aggregate the received attestations, we know they all have the same data root.
 				aggAtts, err := attaggregation.Aggregate(atts)
 				if err != nil {
-					log.WithError(err).Error("Could not aggregate collected attestations")
+					log.WithError(err).Error("Could not aggregate attestations")
 					continue
 				}
 				if len(aggAtts) == 0 {
@@ -351,9 +354,9 @@ func (bs *Server) collectReceivedAttestations(ctx context.Context) {
 				bs.CollectedAttestationsBuffer <- atts
 			}
 		case att := <-bs.ReceivedAttestationsBuffer:
-			attDataRoot, err := stateutil.AttestationDataRoot(att.Data)
+			attDataRoot, err := att.Data.HashTreeRoot()
 			if err != nil {
-				log.Errorf("Could not hash tree root data: %v", err)
+				log.Errorf("Could not hash tree root attestation data: %v", err)
 				continue
 			}
 			attsByRoot[attDataRoot] = append(attsByRoot[attDataRoot], att)
@@ -375,7 +378,7 @@ func (bs *Server) collectReceivedAttestations(ctx context.Context) {
 // attestations are processed and when they are no longer valid.
 // https://github.com/ethereum/eth2.0-specs/blob/dev/specs/core/0_beacon-chain.md#attestations
 func (bs *Server) AttestationPool(
-	ctx context.Context, req *ethpb.AttestationPoolRequest,
+	_ context.Context, req *ethpb.AttestationPoolRequest,
 ) (*ethpb.AttestationPoolResponse, error) {
 	if int(req.PageSize) > cmd.Get().MaxRPCPageSize {
 		return nil, status.Errorf(

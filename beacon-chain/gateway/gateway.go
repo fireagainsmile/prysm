@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/connectivity"
 )
 
-var _ = shared.Service(&Gateway{})
+var _ shared.Service = (*Gateway)(nil)
 
 // Gateway is the gRPC gateway to serve HTTP JSON traffic as a proxy and forward
 // it to the beacon-chain gRPC server.
@@ -62,6 +62,7 @@ func (g *Gateway) Start() {
 		ethpb.RegisterNodeHandler,
 		ethpb.RegisterBeaconChainHandler,
 		ethpb.RegisterBeaconNodeValidatorHandler,
+		pbrpc.RegisterHealthHandler,
 	}
 	if g.enableDebugRPCEndpoints {
 		handlers = append(handlers, pbrpc.RegisterDebugHandler)
@@ -87,8 +88,6 @@ func (g *Gateway) Start() {
 			return
 		}
 	}()
-
-	return
 }
 
 // Status of grpc gateway. Returns an error if this service is unhealthy.

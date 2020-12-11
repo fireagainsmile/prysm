@@ -11,6 +11,8 @@ import (
 
 	lru "github.com/hashicorp/golang-lru"
 	"github.com/libp2p/go-libp2p-core/peer"
+	"github.com/libp2p/go-libp2p-core/protocol"
+	gcache "github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain"
@@ -21,19 +23,22 @@ import (
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
+	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/attestations"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/slashings"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/voluntaryexits"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
 	"github.com/prysmaticlabs/prysm/shared"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/abool"
+	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/runutil"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 )
 
-var _ = shared.Service(&Service{})
+var _ shared.Service = (*Service)(nil)
 
-const rangeLimit = 1000
+const rangeLimit = 1024
 const seenBlockSize = 1000
 const seenAttSize = 10000
 const seenExitSize = 100
@@ -42,6 +47,8 @@ const seenProposerSlashingSize = 100
 const badBlockSize = 1000
 
 const syncMetricsInterval = 10 * time.Second
+
+var pendingBlockExpTime = time.Duration(params.BeaconConfig().SlotsPerEpoch*params.BeaconConfig().SecondsPerSlot) * time.Second // Seconds in one epoch.
 
 // Config to set up the regular sync service.
 type Config struct {
@@ -82,12 +89,12 @@ type Service struct {
 	exitPool                  *voluntaryexits.Pool
 	slashingPool              *slashings.Pool
 	chain                     blockchainService
-	slotToPendingBlocks       map[uint64]*ethpb.SignedBeaconBlock
+	slotToPendingBlocks       *gcache.Cache
 	seenPendingBlocks         map[[32]byte]bool
 	blkRootToPendingAtts      map[[32]byte][]*ethpb.SignedAggregateAttestationAndProof
 	pendingAttsLock           sync.RWMutex
 	pendingQueueLock          sync.RWMutex
-	chainStarted              bool
+	chainStarted              *abool.AtomicBool
 	initialSync               Checker
 	validateBlockLock         sync.RWMutex
 	stateNotifier             statefeed.Notifier
@@ -110,10 +117,12 @@ type Service struct {
 	stateGen                  *stategen.State
 }
 
-// NewRegularSync service.
-func NewRegularSync(cfg *Config) *Service {
+// NewService initializes new regular sync service.
+func NewService(ctx context.Context, cfg *Config) *Service {
+	c := gcache.New(pendingBlockExpTime /* exp time */, 2*pendingBlockExpTime /* prune time */)
+
 	rLimiter := newRateLimiter(cfg.P2P)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	r := &Service{
 		ctx:                  ctx,
 		cancel:               cancel,
@@ -122,10 +131,11 @@ func NewRegularSync(cfg *Config) *Service {
 		attPool:              cfg.AttPool,
 		exitPool:             cfg.ExitPool,
 		slashingPool:         cfg.SlashingPool,
+		chainStarted:         abool.New(),
 		chain:                cfg.Chain,
 		initialSync:          cfg.InitialSync,
 		attestationNotifier:  cfg.AttestationNotifier,
-		slotToPendingBlocks:  make(map[uint64]*ethpb.SignedBeaconBlock),
+		slotToPendingBlocks:  c,
 		seenPendingBlocks:    make(map[[32]byte]bool),
 		blkRootToPendingAtts: make(map[[32]byte][]*ethpb.SignedAggregateAttestationAndProof),
 		stateNotifier:        cfg.StateNotifier,
@@ -146,7 +156,7 @@ func (s *Service) Start() {
 		panic(err)
 	}
 
-	s.p2p.AddConnectionHandler(s.reValidatePeer)
+	s.p2p.AddConnectionHandler(s.reValidatePeer, s.sendGoodbye)
 	s.p2p.AddDisconnectionHandler(func(_ context.Context, _ peer.ID) error {
 		// no-op
 		return nil
@@ -155,7 +165,9 @@ func (s *Service) Start() {
 	s.processPendingBlocksQueue()
 	s.processPendingAttsQueue()
 	s.maintainPeerStatuses()
-	s.resyncIfBehind()
+	if !flags.Get().DisableSync {
+		s.resyncIfBehind()
+	}
 
 	// Update sync metrics.
 	runutil.RunEvery(s.ctx, syncMetricsInterval, s.updateMetrics)
@@ -166,25 +178,29 @@ func (s *Service) Stop() error {
 	defer func() {
 		if s.rateLimiter != nil {
 			s.rateLimiter.free()
-			s.rateLimiter = nil
 		}
 	}()
+	// Removing RPC Stream handlers.
+	for _, p := range s.p2p.Host().Mux().Protocols() {
+		s.p2p.Host().RemoveStreamHandler(protocol.ID(p))
+	}
+	// Deregister Topic Subscribers.
+	for _, t := range s.p2p.PubSub().GetTopics() {
+		if err := s.p2p.PubSub().UnregisterTopicValidator(t); err != nil {
+			log.Errorf("Could not successfully unregister for topic %s: %v", t, err)
+		}
+	}
 	defer s.cancel()
 	return nil
 }
 
 // Status of the currently running regular sync service.
 func (s *Service) Status() error {
-	if s.chainStarted {
-		if s.initialSync.Syncing() {
-			return errors.New("waiting for initial sync")
-		}
-		// If our head slot is on a previous epoch and our peers are reporting their head block are
-		// in the most recent epoch, then we might be out of sync.
-		if headEpoch := helpers.SlotToEpoch(s.chain.HeadSlot()); headEpoch+1 < helpers.SlotToEpoch(s.chain.CurrentSlot()) &&
-			headEpoch+1 < s.p2p.Peers().HighestEpoch() {
-			return errors.New("out of sync")
-		}
+	// If our head slot is on a previous epoch and our peers are reporting their head block are
+	// in the most recent epoch, then we might be out of sync.
+	if headEpoch := helpers.SlotToEpoch(s.chain.HeadSlot()); headEpoch+1 < helpers.SlotToEpoch(s.chain.CurrentSlot()) &&
+		headEpoch+1 < s.p2p.Peers().HighestEpoch() {
+		return errors.New("out of sync")
 	}
 	return nil
 }
@@ -231,35 +247,52 @@ func (s *Service) registerHandlers() {
 	stateChannel := make(chan *feed.Event, 1)
 	stateSub := s.stateNotifier.StateFeed().Subscribe(stateChannel)
 	defer stateSub.Unsubscribe()
-	for s.chainStarted == false {
+	for {
 		select {
 		case event := <-stateChannel:
-			if event.Type == statefeed.Initialized {
+			switch event.Type {
+			case statefeed.Initialized:
 				data, ok := event.Data.(*statefeed.InitializedData)
 				if !ok {
 					log.Error("Event feed data is not type *statefeed.InitializedData")
 					return
 				}
-				log.WithField("starttime", data.StartTime).Debug("Received state initialized event")
+				startTime := data.StartTime
+				log.WithField("starttime", startTime).Debug("Received state initialized event")
 
-				// Register respective rpc and pubsub handlers at state initialized event.
+				// Register respective rpc handlers at state initialized event.
 				s.registerRPCHandlers()
-				s.registerSubscribers()
-
-				if data.StartTime.After(roughtime.Now()) {
-					stateSub.Unsubscribe()
-					time.Sleep(roughtime.Until(data.StartTime))
+				// Wait for chainstart in separate routine.
+				go func() {
+					if startTime.After(timeutils.Now()) {
+						time.Sleep(timeutils.Until(startTime))
+					}
+					log.WithField("starttime", startTime).Debug("Chain started in sync service")
+					s.markForChainStart()
+				}()
+			case statefeed.Synced:
+				_, ok := event.Data.(*statefeed.SyncedData)
+				if !ok {
+					log.Error("Event feed data is not type *statefeed.SyncedData")
+					return
 				}
-				s.chainStarted = true
+				// Register respective pubsub handlers at state synced event.
+				s.registerSubscribers()
+				return
 			}
 		case <-s.ctx.Done():
 			log.Debug("Context closed, exiting goroutine")
 			return
 		case err := <-stateSub.Err():
-			log.WithError(err).Error("Subscription to state notifier failed")
+			log.WithError(err).Error("Could not subscribe to state notifier")
 			return
 		}
 	}
+}
+
+// marks the chain as having started.
+func (s *Service) markForChainStart() {
+	s.chainStarted.Set()
 }
 
 // Checker defines a struct which can verify whether a node is currently

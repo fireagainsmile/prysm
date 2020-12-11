@@ -15,7 +15,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/sliceutil"
 )
 
-func (s *Service) committeeIndexBeaconAttestationSubscriber(ctx context.Context, msg proto.Message) error {
+func (s *Service) committeeIndexBeaconAttestationSubscriber(_ context.Context, msg proto.Message) error {
 	a, ok := msg.(*eth.Attestation)
 	if !ok {
 		return fmt.Errorf("message was not type *eth.Attestation, type=%T", msg)
@@ -28,7 +28,7 @@ func (s *Service) committeeIndexBeaconAttestationSubscriber(ctx context.Context,
 
 	exists, err := s.attPool.HasAggregatedAttestation(a)
 	if err != nil {
-		return errors.Wrap(err, "failed to determine if attestation pool has this atttestation")
+		return errors.Wrap(err, "Could not determine if attestation pool has this atttestation")
 	}
 	if exists {
 		return nil
@@ -46,10 +46,6 @@ func (s *Service) committeeIndexBeaconAttestationSubscriber(ctx context.Context,
 	return s.attPool.SaveUnaggregatedAttestation(a)
 }
 
-func (s *Service) subnetCount() int {
-	return int(params.BeaconNetworkConfig().AttestationSubnetCount)
-}
-
 func (s *Service) persistentSubnetIndices() []uint64 {
 	return cache.SubnetIDs.GetAllSubnets()
 }
@@ -57,7 +53,7 @@ func (s *Service) persistentSubnetIndices() []uint64 {
 func (s *Service) aggregatorSubnetIndices(currentSlot uint64) []uint64 {
 	endEpoch := helpers.SlotToEpoch(currentSlot) + 1
 	endSlot := endEpoch * params.BeaconConfig().SlotsPerEpoch
-	commIds := []uint64{}
+	var commIds []uint64
 	for i := currentSlot; i <= endSlot; i++ {
 		commIds = append(commIds, cache.SubnetIDs.GetAggregatorSubnetIDs(i)...)
 	}
@@ -67,7 +63,7 @@ func (s *Service) aggregatorSubnetIndices(currentSlot uint64) []uint64 {
 func (s *Service) attesterSubnetIndices(currentSlot uint64) []uint64 {
 	endEpoch := helpers.SlotToEpoch(currentSlot) + 1
 	endSlot := endEpoch * params.BeaconConfig().SlotsPerEpoch
-	commIds := []uint64{}
+	var commIds []uint64
 	for i := currentSlot; i <= endSlot; i++ {
 		commIds = append(commIds, cache.SubnetIDs.GetAttesterSubnetIDs(i)...)
 	}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
@@ -16,32 +15,28 @@ import (
 )
 
 // retrieves the signature set from the raw data, public key,signature and domain provided.
-func retrieveSignatureSet(signedData []byte, pub []byte, signature []byte, domain []byte) (*bls.SignatureSet, error) {
+func retrieveSignatureSet(signedData, pub, signature, domain []byte) (*bls.SignatureSet, error) {
 	publicKey, err := bls.PublicKeyFromBytes(pub)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not convert bytes to public key")
-	}
-	sig, err := bls.SignatureFromBytes(signature)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not convert bytes to signature")
 	}
 	signingData := &pb.SigningData{
 		ObjectRoot: signedData,
 		Domain:     domain,
 	}
-	root, err := ssz.HashTreeRoot(signingData)
+	root, err := signingData.HashTreeRoot()
 	if err != nil {
 		return nil, errors.Wrap(err, "could not hash container")
 	}
 	return &bls.SignatureSet{
-		Signatures: []bls.Signature{sig},
+		Signatures: [][]byte{signature},
 		PublicKeys: []bls.PublicKey{publicKey},
 		Messages:   [][32]byte{root},
 	}, nil
 }
 
 // verifies the signature from the raw data, public key and domain provided.
-func verifySignature(signedData []byte, pub []byte, signature []byte, domain []byte) error {
+func verifySignature(signedData, pub, signature, domain []byte) error {
 	set, err := retrieveSignatureSet(signedData, pub, signature, domain)
 	if err != nil {
 		return err
@@ -53,7 +48,11 @@ func verifySignature(signedData []byte, pub []byte, signature []byte, domain []b
 	sig := set.Signatures[0]
 	publicKey := set.PublicKeys[0]
 	root := set.Messages[0]
-	if !sig.Verify(publicKey, root[:]) {
+	rSig, err := bls.SignatureFromBytes(sig)
+	if err != nil {
+		return err
+	}
+	if !rSig.Verify(publicKey, root[:]) {
 		return helpers.ErrSigFailedToVerify
 	}
 	return nil
@@ -71,7 +70,7 @@ func VerifyBlockSignature(beaconState *stateTrie.BeaconState, block *ethpb.Signe
 		return err
 	}
 	proposerPubKey := proposer.PublicKey
-	return helpers.VerifyBlockSigningRoot(block.Block, proposerPubKey[:], block.Signature, domain)
+	return helpers.VerifyBlockSigningRoot(block.Block, proposerPubKey, block.Signature, domain)
 }
 
 // BlockSignatureSet retrieves the block signature set from the provided block and its corresponding state.
@@ -93,16 +92,16 @@ func BlockSignatureSet(beaconState *stateTrie.BeaconState, block *ethpb.SignedBe
 // from a block and its corresponding state.
 func RandaoSignatureSet(beaconState *stateTrie.BeaconState,
 	body *ethpb.BeaconBlockBody,
-) (*bls.SignatureSet, *stateTrie.BeaconState, error) {
+) (*bls.SignatureSet, error) {
 	buf, proposerPub, domain, err := randaoSigningData(beaconState)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	set, err := retrieveSignatureSet(buf, proposerPub[:], body.RandaoReveal, domain)
+	set, err := retrieveSignatureSet(buf, proposerPub, body.RandaoReveal, domain)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return set, beaconState, nil
+	return set, nil
 }
 
 // retrieves the randao related signing data from the state.
@@ -130,35 +129,30 @@ func createAttestationSignatureSet(ctx context.Context, beaconState *stateTrie.B
 		return nil, nil
 	}
 
-	sigs := make([]bls.Signature, len(atts))
+	sigs := make([][]byte, len(atts))
 	pks := make([]bls.PublicKey, len(atts))
 	msgs := make([][32]byte, len(atts))
 	for i, a := range atts {
-		sig, err := bls.SignatureFromBytes(a.Signature)
-		if err != nil {
-			return nil, err
-		}
-		sigs[i] = sig
+		sigs[i] = a.Signature
 		c, err := helpers.BeaconCommitteeFromState(beaconState, a.Data.Slot, a.Data.CommitteeIndex)
 		if err != nil {
 			return nil, err
 		}
 		ia := attestationutil.ConvertToIndexed(ctx, a, c)
+		if err := attestationutil.IsValidAttestationIndices(ctx, ia); err != nil {
+			return nil, err
+		}
 		indices := ia.AttestingIndices
-		var pk bls.PublicKey
+		pubkeys := make([][]byte, len(indices))
 		for i := 0; i < len(indices); i++ {
 			pubkeyAtIdx := beaconState.PubkeyAtIndex(indices[i])
-			p, err := bls.PublicKeyFromBytes(pubkeyAtIdx[:])
-			if err != nil {
-				return nil, errors.Wrap(err, "could not deserialize validator public key")
-			}
-			if pk == nil {
-				pk = p
-			} else {
-				pk.Aggregate(p)
-			}
+			pubkeys[i] = pubkeyAtIdx[:]
 		}
-		pks[i] = pk
+		aggP, err := bls.AggregatePublicKeys(pubkeys)
+		if err != nil {
+			return nil, err
+		}
+		pks[i] = aggP
 
 		root, err := helpers.ComputeSigningRoot(ia.Data, domain)
 		if err != nil {

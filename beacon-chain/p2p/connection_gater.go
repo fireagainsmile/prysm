@@ -9,28 +9,38 @@ import (
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/multiformats/go-multiaddr"
 	filter "github.com/multiformats/go-multiaddr"
-	manet "github.com/multiformats/go-multiaddr-net"
+	manet "github.com/multiformats/go-multiaddr/net"
 	"github.com/sirupsen/logrus"
 )
 
-// limit for rate limiter when processing new inbound dials.
-const ipLimit = 4
+const (
+	// Limit for rate limiter when processing new inbound dials.
+	ipLimit = 4
 
-// burst limit for inbound dials.
-const ipBurst = 8
+	// Burst limit for inbound dials.
+	ipBurst = 8
+
+	// High watermark buffer signifies the buffer till which
+	// we will handle inbound requests.
+	highWatermarkBuffer = 10
+)
 
 // InterceptPeerDial tests whether we're permitted to Dial the specified peer.
-func (s *Service) InterceptPeerDial(p peer.ID) (allow bool) {
+func (s *Service) InterceptPeerDial(_ peer.ID) (allow bool) {
 	return true
 }
 
 // InterceptAddrDial tests whether we're permitted to dial the specified
 // multiaddr for the given peer.
-func (s *Service) InterceptAddrDial(_ peer.ID, m multiaddr.Multiaddr) (allow bool) {
+func (s *Service) InterceptAddrDial(pid peer.ID, m multiaddr.Multiaddr) (allow bool) {
+	// Disallow bad peers from dialing in.
+	if s.peers.IsBad(pid) {
+		return false
+	}
 	return filterConnections(s.addrFilter, m)
 }
 
-// InterceptAccept tests whether an incipient inbound connection is allowed.
+// InterceptAccept checks whether the incidental inbound connection is allowed.
 func (s *Service) InterceptAccept(n network.ConnMultiaddrs) (allow bool) {
 	if !s.validateDial(n.RemoteMultiaddr()) {
 		// Allow other go-routines to run in the event
@@ -40,8 +50,7 @@ func (s *Service) InterceptAccept(n network.ConnMultiaddrs) (allow bool) {
 			"reason": "exceeded dial limit"}).Trace("Not accepting inbound dial from ip address")
 		return false
 	}
-
-	if s.isPeerAtLimit() {
+	if s.isPeerAtLimit(true /* inbound */) {
 		log.WithFields(logrus.Fields{"peer": n.RemoteMultiaddr(),
 			"reason": "at peer limit"}).Trace("Not accepting inbound dial")
 		return false
@@ -51,12 +60,12 @@ func (s *Service) InterceptAccept(n network.ConnMultiaddrs) (allow bool) {
 
 // InterceptSecured tests whether a given connection, now authenticated,
 // is allowed.
-func (s *Service) InterceptSecured(_ network.Direction, _ peer.ID, n network.ConnMultiaddrs) (allow bool) {
+func (s *Service) InterceptSecured(_ network.Direction, _ peer.ID, _ network.ConnMultiaddrs) (allow bool) {
 	return true
 }
 
 // InterceptUpgraded tests whether a fully capable connection is allowed.
-func (s *Service) InterceptUpgraded(n network.Conn) (allow bool, reason control.DisconnectReason) {
+func (s *Service) InterceptUpgraded(_ network.Conn) (allow bool, reason control.DisconnectReason) {
 	return true, 0
 }
 

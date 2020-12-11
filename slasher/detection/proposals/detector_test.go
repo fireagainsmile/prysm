@@ -2,16 +2,18 @@ package proposals
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	testDB "github.com/prysmaticlabs/prysm/slasher/db/testing"
 	"github.com/prysmaticlabs/prysm/slasher/detection/proposals/iface"
 	testDetect "github.com/prysmaticlabs/prysm/slasher/detection/testing"
 )
 
-var _ = iface.ProposalsDetector(&ProposeDetector{})
+var _ iface.ProposalsDetector = (*ProposeDetector)(nil)
 
 func TestProposalsDetector_DetectSlashingsForBlockHeaders(t *testing.T) {
 	type testStruct struct {
@@ -20,22 +22,18 @@ func TestProposalsDetector_DetectSlashingsForBlockHeaders(t *testing.T) {
 		incomingBlk *ethpb.SignedBeaconBlockHeader
 		slashing    *ethpb.ProposerSlashing
 	}
-	blk1slot0, err := testDetect.SignedBlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blk2slot0, err := testDetect.SignedBlockHeader(testDetect.StartSlot(0), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blk1slot1, err := testDetect.SignedBlockHeader(testDetect.StartSlot(0)+1, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	blk1epoch1, err := testDetect.SignedBlockHeader(testDetect.StartSlot(1), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s0, err := helpers.StartSlot(0)
+	require.NoError(t, err)
+	blk1slot0, err := testDetect.SignedBlockHeader(s0, 0)
+	require.NoError(t, err)
+	blk2slot0, err := testDetect.SignedBlockHeader(s0, 0)
+	require.NoError(t, err)
+	blk1slot1, err := testDetect.SignedBlockHeader(s0+1, 0)
+	require.NoError(t, err)
+	s1, err := helpers.StartSlot(1)
+	require.NoError(t, err)
+	blk1epoch1, err := testDetect.SignedBlockHeader(s1, 0)
+	require.NoError(t, err)
 	tests := []testStruct{
 		{
 			name:        "same block sig dont slash",
@@ -72,19 +70,11 @@ func TestProposalsDetector_DetectSlashingsForBlockHeaders(t *testing.T) {
 				slasherDB: db,
 			}
 
-			if err := sd.slasherDB.SaveBlockHeader(ctx, tt.blk); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, sd.slasherDB.SaveBlockHeader(ctx, tt.blk))
 
 			res, err := sd.DetectDoublePropose(ctx, tt.incomingBlk)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			if !reflect.DeepEqual(res, tt.slashing) {
-				t.Errorf("Wanted: %v, received %v", tt.slashing, res)
-			}
-
+			require.NoError(t, err)
+			assert.DeepEqual(t, tt.slashing, res)
 		})
 	}
 }

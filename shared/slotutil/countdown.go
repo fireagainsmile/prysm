@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -16,28 +16,33 @@ var log = logrus.WithField("prefix", "slotutil")
 // logging the remaining minutes until the genesis chainstart event
 // along with important genesis state metadata such as number
 // of genesis validators.
-func CountdownToGenesis(ctx context.Context, genesisTime time.Time, genesisValidatorCount uint64) {
+func CountdownToGenesis(ctx context.Context, genesisTime time.Time, genesisValidatorCount uint64, genesisStateRoot [32]byte) {
 	ticker := time.NewTicker(params.BeaconConfig().GenesisCountdownInterval)
-	timeTillGenesis := genesisTime.Sub(roughtime.Now())
+	defer func() {
+		// Used in anonymous function to make sure that updated (per second) ticker is stopped.
+		ticker.Stop()
+	}()
 	logFields := logrus.Fields{
 		"genesisValidators": fmt.Sprintf("%d", genesisValidatorCount),
 		"genesisTime":       fmt.Sprintf("%v", genesisTime),
+		"genesisStateRoot":  fmt.Sprintf("%x", genesisStateRoot),
 	}
+	secondTimerActivated := false
 	for {
-		select {
-		case <-time.After(timeTillGenesis):
+		currentTime := timeutils.Now()
+		if currentTime.After(genesisTime) {
 			log.WithFields(logFields).Info("Chain genesis time reached")
 			return
+		}
+		timeRemaining := genesisTime.Sub(currentTime)
+		if !secondTimerActivated && timeRemaining <= 2*time.Minute {
+			ticker.Stop()
+			// Replace ticker with a one having higher granularity.
+			ticker = time.NewTicker(time.Second)
+			secondTimerActivated = true
+		}
+		select {
 		case <-ticker.C:
-			currentTime := roughtime.Now()
-			if currentTime.After(genesisTime) {
-				log.WithFields(logFields).Info("Chain genesis time reached")
-				return
-			}
-			timeRemaining := genesisTime.Sub(currentTime)
-			if timeRemaining <= 2*time.Minute {
-				ticker = time.NewTicker(time.Second)
-			}
 			if timeRemaining >= time.Second {
 				log.WithFields(logFields).Infof(
 					"%s until chain genesis",
@@ -45,6 +50,7 @@ func CountdownToGenesis(ctx context.Context, genesisTime time.Time, genesisValid
 				)
 			}
 		case <-ctx.Done():
+			log.Debug("Context closed, exiting routine")
 			return
 		}
 	}

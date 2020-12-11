@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 
+	fssz "github.com/ferranbt/fastssz"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
@@ -19,7 +20,7 @@ import (
 	_ "gopkg.in/confluentinc/confluent-kafka-go.v1/kafka/librdkafka" // Required for c++ kafka library.
 )
 
-var _ = iface.Database(&Exporter{})
+var _ iface.Database = (*Exporter)(nil)
 var log = logrus.WithField("prefix", "exporter")
 var marshaler = &jsonpb.Marshaler{}
 
@@ -55,7 +56,13 @@ func (e Exporter) publish(ctx context.Context, topic string, msg proto.Message) 
 		return err
 	}
 
-	key, err := ssz.HashTreeRoot(msg)
+	var key [32]byte
+	var err error
+	if v, ok := msg.(fssz.HashRoot); ok {
+		key, err = v.HashTreeRoot()
+	} else {
+		key, err = ssz.HashTreeRoot(msg)
+	}
 	if err != nil {
 		traceutil.AnnotateError(span, err)
 		return err

@@ -5,7 +5,6 @@ package kv
 import (
 	"os"
 	"path"
-	"sync"
 	"time"
 
 	"github.com/dgraph-io/ristretto"
@@ -14,11 +13,12 @@ import (
 	prombolt "github.com/prysmaticlabs/prombbolt"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db/iface"
+	"github.com/prysmaticlabs/prysm/shared/fileutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	bolt "go.etcd.io/bbolt"
 )
 
-var _ = iface.Database(&Store{})
+var _ iface.Database = (*Store)(nil)
 
 const (
 	// VotesCacheSize with 1M validators will be 8MB.
@@ -40,8 +40,6 @@ type Store struct {
 	databasePath        string
 	blockCache          *ristretto.Cache
 	validatorIndexCache *ristretto.Cache
-	stateSlotBitLock    sync.Mutex
-	blockSlotBitLock    sync.Mutex
 	stateSummaryCache   *cache.StateSummaryCache
 }
 
@@ -49,13 +47,19 @@ type Store struct {
 // path specified, creates the kv-buckets based on the schema, and stores
 // an open connection db object as a property of the Store struct.
 func NewKVStore(dirPath string, stateSummaryCache *cache.StateSummaryCache) (*Store, error) {
-	if err := os.MkdirAll(dirPath, params.BeaconIoConfig().ReadWriteExecutePermissions); err != nil {
+	hasDir, err := fileutil.HasDir(dirPath)
+	if err != nil {
 		return nil, err
+	}
+	if !hasDir {
+		if err := fileutil.MkdirAll(dirPath); err != nil {
+			return nil, err
+		}
 	}
 	datafile := path.Join(dirPath, databaseFileName)
 	boltDB, err := bolt.Open(datafile, params.BeaconIoConfig().ReadWritePermissions, &bolt.Options{Timeout: 1 * time.Second, InitialMmapSize: 10e6})
 	if err != nil {
-		if err == bolt.ErrTimeout {
+		if errors.Is(err, bolt.ErrTimeout) {
 			return nil, errors.New("cannot obtain database lock, database may be in use by another process")
 		}
 		return nil, err
@@ -125,26 +129,26 @@ func NewKVStore(dirPath string, stateSummaryCache *cache.StateSummaryCache) (*St
 }
 
 // ClearDB removes the previously stored database in the data directory.
-func (kv *Store) ClearDB() error {
-	if _, err := os.Stat(kv.databasePath); os.IsNotExist(err) {
+func (s *Store) ClearDB() error {
+	if _, err := os.Stat(s.databasePath); os.IsNotExist(err) {
 		return nil
 	}
-	prometheus.Unregister(createBoltCollector(kv.db))
-	if err := os.Remove(path.Join(kv.databasePath, databaseFileName)); err != nil {
+	prometheus.Unregister(createBoltCollector(s.db))
+	if err := os.Remove(path.Join(s.databasePath, databaseFileName)); err != nil {
 		return errors.Wrap(err, "could not remove database file")
 	}
 	return nil
 }
 
 // Close closes the underlying BoltDB database.
-func (kv *Store) Close() error {
-	prometheus.Unregister(createBoltCollector(kv.db))
-	return kv.db.Close()
+func (s *Store) Close() error {
+	prometheus.Unregister(createBoltCollector(s.db))
+	return s.db.Close()
 }
 
 // DatabasePath at which this database writes files.
-func (kv *Store) DatabasePath() string {
-	return kv.databasePath
+func (s *Store) DatabasePath() string {
+	return s.databasePath
 }
 
 func createBuckets(tx *bolt.Tx, buckets ...[]byte) error {

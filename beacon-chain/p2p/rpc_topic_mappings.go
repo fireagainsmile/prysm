@@ -4,6 +4,7 @@ import (
 	"reflect"
 
 	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/types"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 )
 
@@ -28,10 +29,10 @@ const (
 // RPCTopicMappings map the base message type to the rpc request.
 var RPCTopicMappings = map[string]interface{}{
 	RPCStatusTopic:        new(pb.Status),
-	RPCGoodByeTopic:       new(uint64),
+	RPCGoodByeTopic:       new(types.SSZUint64),
 	RPCBlocksByRangeTopic: new(pb.BeaconBlocksByRangeRequest),
-	RPCBlocksByRootTopic:  [][32]byte{},
-	RPCPingTopic:          new(uint64),
+	RPCBlocksByRootTopic:  new(types.BeaconBlockByRootsReq),
+	RPCPingTopic:          new(types.SSZUint64),
 	RPCMetaDataTopic:      new(interface{}),
 }
 
@@ -46,20 +47,6 @@ func VerifyTopicMapping(topic string, msg interface{}) error {
 	registeredType := reflect.TypeOf(msgType)
 	typeMatches := registeredType.AssignableTo(receivedType)
 
-	// TODO(#6408) Allow multiple message types for topic, as we currently have 2 different
-	// rpc request types until issue is resolved.
-	if topic == RPCBlocksByRootTopic {
-		if typeMatches {
-			return nil
-		}
-		secondType := reflect.TypeOf(new(pb.BeaconBlocksByRootRequest))
-		secondTypeMatches := secondType.AssignableTo(receivedType)
-		if !secondTypeMatches {
-			return errors.Errorf("accompanying message type is incorrect for topic: wanted %v or %v but got %v",
-				registeredType.String(), secondType.String(), receivedType.String())
-		}
-		return nil
-	}
 	if !typeMatches {
 		return errors.Errorf("accompanying message type is incorrect for topic: wanted %v  but got %v",
 			registeredType.String(), receivedType.String())

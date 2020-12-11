@@ -17,6 +17,7 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	"github.com/prysmaticlabs/prysm/beacon-chain/sync"
+	pbrpc "github.com/prysmaticlabs/prysm/proto/beacon/rpc/v1"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -27,17 +28,19 @@ import (
 // providing RPC endpoints for verifying a beacon node's sync status, genesis and
 // version information, and services the node implements and runs.
 type Server struct {
-	SyncChecker        sync.Checker
-	Server             *grpc.Server
-	BeaconDB           db.ReadOnlyDatabase
-	PeersFetcher       p2p.PeersProvider
-	PeerManager        p2p.PeerManager
-	GenesisTimeFetcher blockchain.TimeFetcher
-	GenesisFetcher     blockchain.GenesisFetcher
+	SyncChecker          sync.Checker
+	Server               *grpc.Server
+	BeaconDB             db.ReadOnlyDatabase
+	PeersFetcher         p2p.PeersProvider
+	PeerManager          p2p.PeerManager
+	GenesisTimeFetcher   blockchain.TimeFetcher
+	GenesisFetcher       blockchain.GenesisFetcher
+	BeaconMonitoringHost string
+	BeaconMonitoringPort int
 }
 
 // GetSyncStatus checks the current network sync status of the node.
-func (ns *Server) GetSyncStatus(ctx context.Context, _ *ptypes.Empty) (*ethpb.SyncStatus, error) {
+func (ns *Server) GetSyncStatus(_ context.Context, _ *ptypes.Empty) (*ethpb.SyncStatus, error) {
 	return &ethpb.SyncStatus{
 		Syncing: ns.SyncChecker.Syncing(),
 	}, nil
@@ -71,7 +74,7 @@ func (ns *Server) GetGenesis(ctx context.Context, _ *ptypes.Empty) (*ethpb.Genes
 }
 
 // GetVersion checks the version information of the beacon node.
-func (ns *Server) GetVersion(ctx context.Context, _ *ptypes.Empty) (*ethpb.Version, error) {
+func (ns *Server) GetVersion(_ context.Context, _ *ptypes.Empty) (*ethpb.Version, error) {
 	return &ethpb.Version{
 		Version: version.GetVersion(),
 	}, nil
@@ -82,7 +85,7 @@ func (ns *Server) GetVersion(ctx context.Context, _ *ptypes.Empty) (*ethpb.Versi
 // Any service not present in this list may return UNIMPLEMENTED or
 // PERMISSION_DENIED. The server may also support fetching services by grpc
 // reflection.
-func (ns *Server) ListImplementedServices(ctx context.Context, _ *ptypes.Empty) (*ethpb.ImplementedServices, error) {
+func (ns *Server) ListImplementedServices(_ context.Context, _ *ptypes.Empty) (*ethpb.ImplementedServices, error) {
 	serviceInfo := ns.Server.GetServiceInfo()
 	serviceNames := make([]string, 0, len(serviceInfo))
 	for svc := range serviceInfo {
@@ -95,14 +98,14 @@ func (ns *Server) ListImplementedServices(ctx context.Context, _ *ptypes.Empty) 
 }
 
 // GetHost returns the p2p data on the current local and host peer.
-func (ns *Server) GetHost(ctx context.Context, _ *ptypes.Empty) (*ethpb.HostData, error) {
-	stringAddr := []string{}
+func (ns *Server) GetHost(_ context.Context, _ *ptypes.Empty) (*ethpb.HostData, error) {
+	var stringAddr []string
 	for _, addr := range ns.PeerManager.Host().Addrs() {
 		stringAddr = append(stringAddr, addr.String())
 	}
 	record := ns.PeerManager.ENR()
 	enr := ""
-	err := error(nil)
+	var err error
 	if record != nil {
 		enr, err = p2p.SerializeENR(record)
 		if err != nil {
@@ -117,8 +120,15 @@ func (ns *Server) GetHost(ctx context.Context, _ *ptypes.Empty) (*ethpb.HostData
 	}, nil
 }
 
+// GetLogsEndpoint
+func (ns *Server) GetLogsEndpoint(_ context.Context, _ *ptypes.Empty) (*pbrpc.LogsEndpointResponse, error) {
+	return &pbrpc.LogsEndpointResponse{
+		BeaconLogsEndpoint: fmt.Sprintf("%s:%d", ns.BeaconMonitoringHost, ns.BeaconMonitoringPort),
+	}, nil
+}
+
 // GetPeer returns the data known about the peer defined by the provided peer id.
-func (ns *Server) GetPeer(ctx context.Context, peerReq *ethpb.PeerRequest) (*ethpb.Peer, error) {
+func (ns *Server) GetPeer(_ context.Context, peerReq *ethpb.PeerRequest) (*ethpb.Peer, error) {
 	pid, err := peer.Decode(peerReq.PeerId)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "Unable to parse provided peer id: %v", err)
@@ -189,8 +199,11 @@ func (ns *Server) ListPeers(ctx context.Context, _ *ptypes.Empty) (*ethpb.Peers,
 				continue
 			}
 		}
-
-		address := fmt.Sprintf("%s/p2p/%s", multiaddr.String(), pid.Pretty())
+		multiAddrStr := "unknown"
+		if multiaddr != nil {
+			multiAddrStr = multiaddr.String()
+		}
+		address := fmt.Sprintf("%s/p2p/%s", multiAddrStr, pid.Pretty())
 		pbDirection := ethpb.PeerDirection_UNKNOWN
 		switch direction {
 		case network.DirInbound:

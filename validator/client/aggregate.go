@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
+	validatorpb "github.com/prysmaticlabs/prysm/proto/validator/accounts/v2"
+	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
 	"github.com/prysmaticlabs/prysm/shared/slotutil"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"go.opencensus.io/trace"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // SubmitAggregateAndProof submits the validator's signed slot signature to the beacon node
@@ -65,16 +68,23 @@ func (v *validator) SubmitAggregateAndProof(ctx context.Context, slot uint64, pu
 		SlotSignature:  slotSig,
 	})
 	if err != nil {
-		log.WithField("slot", slot).Errorf("Could not submit slot signature to beacon node: %v", err)
-		if v.emitAccountMetrics {
-			ValidatorAggFailVec.WithLabelValues(fmtKey).Inc()
+		status, ok := status.FromError(err)
+		if ok && status.Code() == codes.NotFound {
+			log.WithField("slot", slot).WithError(err).Warn("No attestations to aggregate")
+		} else {
+			log.WithField("slot", slot).WithError(err).Error("Could not submit slot signature to beacon node")
+			if v.emitAccountMetrics {
+				ValidatorAggFailVec.WithLabelValues(fmtKey).Inc()
+			}
 		}
+
 		return
 	}
 
 	sig, err := v.aggregateAndProofSig(ctx, pubKey, res.AggregateAndProof)
 	if err != nil {
 		log.Errorf("Could not sign aggregate and proof: %v", err)
+		return
 	}
 	_, err = v.validatorClient.SubmitSignedAggregateSelectionProof(ctx, &ethpb.SignedAggregateSubmitRequest{
 		SignedAggregateAndProof: &ethpb.SignedAggregateAttestationAndProof{
@@ -111,9 +121,19 @@ func (v *validator) signSlot(ctx context.Context, pubKey [48]byte, slot uint64) 
 		return nil, err
 	}
 
-	sig, err := v.signObject(ctx, pubKey, slot, domain.SignatureDomain)
+	var sig bls.Signature
+	root, err := helpers.ComputeSigningRoot(slot, domain.SignatureDomain)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to sign slot")
+		return nil, err
+	}
+	sig, err = v.keyManager.Sign(ctx, &validatorpb.SignRequest{
+		PublicKey:       pubKey[:],
+		SigningRoot:     root[:],
+		SignatureDomain: domain.SignatureDomain,
+		Object:          &validatorpb.SignRequest_Slot{Slot: slot},
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return sig.Marshal(), nil
@@ -132,7 +152,7 @@ func (v *validator) waitToSlotTwoThirds(ctx context.Context, slot uint64) {
 
 	startTime := slotutil.SlotStartTime(v.genesisTime, slot)
 	finalTime := startTime.Add(delay)
-	time.Sleep(roughtime.Until(finalTime))
+	time.Sleep(timeutils.Until(finalTime))
 }
 
 // This returns the signature of validator signing over aggregate and
@@ -142,7 +162,17 @@ func (v *validator) aggregateAndProofSig(ctx context.Context, pubKey [48]byte, a
 	if err != nil {
 		return nil, err
 	}
-	sig, err := v.signObject(ctx, pubKey, agg, d.SignatureDomain)
+	var sig bls.Signature
+	root, err := helpers.ComputeSigningRoot(agg, d.SignatureDomain)
+	if err != nil {
+		return nil, err
+	}
+	sig, err = v.keyManager.Sign(ctx, &validatorpb.SignRequest{
+		PublicKey:       pubKey[:],
+		SigningRoot:     root[:],
+		SignatureDomain: d.SignatureDomain,
+		Object:          &validatorpb.SignRequest_AggregateAttestationAndProof{AggregateAttestationAndProof: agg},
+	})
 	if err != nil {
 		return nil, err
 	}

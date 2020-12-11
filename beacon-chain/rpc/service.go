@@ -4,6 +4,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	ethpbv1 "github.com/prysmaticlabs/ethereumapis/eth/v1"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
@@ -26,6 +28,7 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	"github.com/prysmaticlabs/prysm/beacon-chain/powchain"
 	"github.com/prysmaticlabs/prysm/beacon-chain/rpc/beacon"
+	"github.com/prysmaticlabs/prysm/beacon-chain/rpc/beaconv1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/rpc/debug"
 	"github.com/prysmaticlabs/prysm/beacon-chain/rpc/node"
 	"github.com/prysmaticlabs/prysm/beacon-chain/rpc/validator"
@@ -33,7 +36,6 @@ import (
 	chainSync "github.com/prysmaticlabs/prysm/beacon-chain/sync"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	pbrpc "github.com/prysmaticlabs/prysm/proto/beacon/rpc/v1"
-	slashpb "github.com/prysmaticlabs/prysm/proto/slashing"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/traceutil"
@@ -58,6 +60,7 @@ type Service struct {
 	ctx                     context.Context
 	cancel                  context.CancelFunc
 	beaconDB                db.HeadAccessDatabase
+	chainInfoFetcher        blockchain.ChainInfoFetcher
 	headFetcher             blockchain.HeadFetcher
 	forkFetcher             blockchain.ForkFetcher
 	finalizationFetcher     blockchain.FinalizationFetcher
@@ -75,6 +78,8 @@ type Service struct {
 	syncService             chainSync.Checker
 	host                    string
 	port                    string
+	beaconMonitoringHost    string
+	beaconMonitoringPort    int
 	listener                net.Listener
 	withCert                string
 	withKey                 string
@@ -90,14 +95,10 @@ type Service struct {
 	stateNotifier           statefeed.Notifier
 	blockNotifier           blockfeed.Notifier
 	operationNotifier       opfeed.Notifier
-	slasherConn             *grpc.ClientConn
-	slasherProvider         string
-	slasherCert             string
-	slasherCredentialError  error
-	slasherClient           slashpb.SlasherClient
 	stateGen                *stategen.State
 	connectedRPCClients     map[net.Addr]bool
 	clientConnectionLock    sync.Mutex
+	maxMsgSize              int
 }
 
 // Config options for the beacon node RPC server.
@@ -106,7 +107,10 @@ type Config struct {
 	Port                    string
 	CertFlag                string
 	KeyFlag                 string
+	BeaconMonitoringHost    string
+	BeaconMonitoringPort    int
 	BeaconDB                db.HeadAccessDatabase
+	ChainInfoFetcher        blockchain.ChainInfoFetcher
 	HeadFetcher             blockchain.HeadFetcher
 	ForkFetcher             blockchain.ForkFetcher
 	FinalizationFetcher     blockchain.FinalizationFetcher
@@ -127,12 +131,11 @@ type Config struct {
 	PeerManager             p2p.PeerManager
 	DepositFetcher          depositcache.DepositFetcher
 	PendingDepositFetcher   depositcache.PendingDepositsFetcher
-	SlasherProvider         string
-	SlasherCert             string
 	StateNotifier           statefeed.Notifier
 	BlockNotifier           blockfeed.Notifier
 	OperationNotifier       opfeed.Notifier
 	StateGen                *stategen.State
+	MaxMsgSize              int
 }
 
 // NewService instantiates a new RPC service instance that will
@@ -143,6 +146,7 @@ func NewService(ctx context.Context, cfg *Config) *Service {
 		ctx:                     ctx,
 		cancel:                  cancel,
 		beaconDB:                cfg.BeaconDB,
+		chainInfoFetcher:        cfg.ChainInfoFetcher,
 		headFetcher:             cfg.HeadFetcher,
 		forkFetcher:             cfg.ForkFetcher,
 		finalizationFetcher:     cfg.FinalizationFetcher,
@@ -162,6 +166,8 @@ func NewService(ctx context.Context, cfg *Config) *Service {
 		syncService:             cfg.SyncService,
 		host:                    cfg.Host,
 		port:                    cfg.Port,
+		beaconMonitoringHost:    cfg.BeaconMonitoringHost,
+		beaconMonitoringPort:    cfg.BeaconMonitoringPort,
 		withCert:                cfg.CertFlag,
 		withKey:                 cfg.KeyFlag,
 		depositFetcher:          cfg.DepositFetcher,
@@ -171,11 +177,10 @@ func NewService(ctx context.Context, cfg *Config) *Service {
 		stateNotifier:           cfg.StateNotifier,
 		blockNotifier:           cfg.BlockNotifier,
 		operationNotifier:       cfg.OperationNotifier,
-		slasherProvider:         cfg.SlasherProvider,
-		slasherCert:             cfg.SlasherCert,
 		stateGen:                cfg.StateGen,
 		enableDebugRPCEndpoints: cfg.EnableDebugRPCEndpoints,
 		connectedRPCClients:     make(map[net.Addr]bool),
+		maxMsgSize:              cfg.MaxMsgSize,
 	}
 }
 
@@ -187,7 +192,7 @@ func (s *Service) Start() {
 		log.Errorf("Could not listen to port in Start() %s: %v", address, err)
 	}
 	s.listener = lis
-	log.WithField("address", address).Info("RPC-API listening on port")
+	log.WithField("address", address).Info("gRPC server listening on port")
 
 	opts := []grpc.ServerOption{
 		grpc.StatsHandler(&ocgrpc.ServerHandler{}),
@@ -207,13 +212,13 @@ func (s *Service) Start() {
 			grpc_opentracing.UnaryServerInterceptor(),
 			s.validatorUnaryConnectionInterceptor,
 		)),
+		grpc.MaxRecvMsgSize(s.maxMsgSize),
 	}
 	grpc_prometheus.EnableHandlingTimeHistogram()
 	if s.withCert != "" && s.withKey != "" {
 		creds, err := credentials.NewServerTLSFromFile(s.withCert, s.withKey)
 		if err != nil {
-			log.Errorf("Could not load TLS keys: %s", err)
-			s.credentialError = err
+			log.WithError(err).Fatal("Could not load TLS keys")
 		}
 		opts = append(opts, grpc.Creds(creds))
 	} else {
@@ -251,13 +256,15 @@ func (s *Service) Start() {
 		StateGen:               s.stateGen,
 	}
 	nodeServer := &node.Server{
-		BeaconDB:           s.beaconDB,
-		Server:             s.grpcServer,
-		SyncChecker:        s.syncService,
-		GenesisTimeFetcher: s.genesisTimeFetcher,
-		PeersFetcher:       s.peersFetcher,
-		PeerManager:        s.peerManager,
-		GenesisFetcher:     s.genesisFetcher,
+		BeaconDB:             s.beaconDB,
+		Server:               s.grpcServer,
+		SyncChecker:          s.syncService,
+		GenesisTimeFetcher:   s.genesisTimeFetcher,
+		PeersFetcher:         s.peersFetcher,
+		PeerManager:          s.peerManager,
+		GenesisFetcher:       s.genesisFetcher,
+		BeaconMonitoringHost: s.beaconMonitoringHost,
+		BeaconMonitoringPort: s.beaconMonitoringPort,
 	}
 	beaconChainServer := &beacon.Server{
 		Ctx:                         s.ctx,
@@ -280,12 +287,33 @@ func (s *Service) Start() {
 		ReceivedAttestationsBuffer:  make(chan *ethpb.Attestation, attestationBufferSize),
 		CollectedAttestationsBuffer: make(chan []*ethpb.Attestation, attestationBufferSize),
 	}
+	beaconChainServerV1 := &beaconv1.Server{
+		Ctx:                 s.ctx,
+		BeaconDB:            s.beaconDB,
+		AttestationsPool:    s.attestationsPool,
+		SlashingsPool:       s.slashingsPool,
+		ChainInfoFetcher:    s.chainInfoFetcher,
+		ChainStartFetcher:   s.chainStartFetcher,
+		DepositFetcher:      s.depositFetcher,
+		BlockFetcher:        s.powChainService,
+		CanonicalStateChan:  s.canonicalStateChan,
+		GenesisTimeFetcher:  s.genesisTimeFetcher,
+		StateNotifier:       s.stateNotifier,
+		BlockNotifier:       s.blockNotifier,
+		AttestationNotifier: s.operationNotifier,
+		Broadcaster:         s.p2p,
+		StateGen:            s.stateGen,
+		SyncChecker:         s.syncService,
+	}
 	ethpb.RegisterNodeServer(s.grpcServer, nodeServer)
+	pbrpc.RegisterHealthServer(s.grpcServer, nodeServer)
 	ethpb.RegisterBeaconChainServer(s.grpcServer, beaconChainServer)
+	ethpbv1.RegisterBeaconChainServer(s.grpcServer, beaconChainServerV1)
 	if s.enableDebugRPCEndpoints {
-		log.Info("Enabled debug RPC endpoints")
+		log.Info("Enabled debug gRPC endpoints")
 		debugServer := &debug.Server{
 			GenesisTimeFetcher: s.genesisTimeFetcher,
+			BeaconDB:           s.beaconDB,
 			StateGen:           s.stateGen,
 			HeadFetcher:        s.headFetcher,
 			PeerManager:        s.peerManager,
@@ -305,44 +333,6 @@ func (s *Service) Start() {
 			}
 		}
 	}()
-	if featureconfig.Get().EnableSlasherConnection {
-		s.startSlasherClient()
-	}
-}
-
-func (s *Service) startSlasherClient() {
-	var dialOpt grpc.DialOption
-	if s.slasherCert != "" {
-		creds, err := credentials.NewClientTLSFromFile(s.slasherCert, "")
-		if err != nil {
-			log.Errorf("Could not get valid credentials: %v", err)
-			s.slasherCredentialError = err
-		}
-		dialOpt = grpc.WithTransportCredentials(creds)
-	} else {
-		dialOpt = grpc.WithInsecure()
-		log.Warn("You are using an insecure gRPC connection! Please provide a certificate and key to use a secure connection.")
-	}
-	slasherOpts := []grpc.DialOption{
-		dialOpt,
-		grpc.WithStatsHandler(&ocgrpc.ClientHandler{}),
-		grpc.WithStreamInterceptor(middleware.ChainStreamClient(
-			grpc_opentracing.StreamClientInterceptor(),
-			grpc_prometheus.StreamClientInterceptor,
-		)),
-		grpc.WithUnaryInterceptor(middleware.ChainUnaryClient(
-			grpc_opentracing.UnaryClientInterceptor(),
-			grpc_prometheus.UnaryClientInterceptor,
-		)),
-	}
-	conn, err := grpc.DialContext(s.ctx, s.slasherProvider, slasherOpts...)
-	if err != nil {
-		log.Errorf("Could not dial endpoint: %s, %v", s.slasherProvider, err)
-		return
-	}
-	log.Info("Successfully started hash slinging slasher©️ gRPC connection")
-	s.slasherConn = conn
-	s.slasherClient = slashpb.NewSlasherClient(s.slasherConn)
 }
 
 // Stop the service.
@@ -352,21 +342,16 @@ func (s *Service) Stop() error {
 		s.grpcServer.GracefulStop()
 		log.Debug("Initiated graceful stop of gRPC server")
 	}
-	if s.slasherConn != nil {
-		if err := s.slasherConn.Close(); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 // Status returns nil or credentialError
 func (s *Service) Status() error {
+	if s.syncService.Syncing() {
+		return errors.New("syncing")
+	}
 	if s.credentialError != nil {
 		return s.credentialError
-	}
-	if s.slasherCredentialError != nil {
-		return s.slasherCredentialError
 	}
 	return nil
 }

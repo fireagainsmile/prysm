@@ -3,6 +3,7 @@ package promptutil
 import (
 	"errors"
 	"strconv"
+	"strings"
 	"unicode"
 
 	strongPasswords "github.com/nbutton23/zxcvbn-go"
@@ -14,6 +15,11 @@ const (
 	// Min password score of 2 out of 5 based on the https://github.com/nbutton23/zxcvbn-go
 	// library for strong-entropy password computation.
 	minPasswordScore = 2
+)
+
+var (
+	errIncorrectPhrase = errors.New("input does not match wanted phrase")
+	errPasswordWeak    = errors.New("password must have at least 8 characters, at least 1 alphabetical character, 1 unicode symbol, and 1 number")
 )
 
 // NotEmpty is a validation function to make sure the input given isn't empty and is valid unicode.
@@ -40,6 +46,15 @@ func ValidateNumber(input string) error {
 func ValidateConfirmation(input string) error {
 	if input != "Y" && input != "y" {
 		return errors.New("please confirm the above text")
+	}
+	return nil
+}
+
+// ValidateYesOrNo ensures the user input either Y, y or N, n.
+func ValidateYesOrNo(input string) error {
+	lowercase := strings.ToLower(input)
+	if lowercase != "y" && lowercase != "n" {
+		return errors.New("please enter y or n")
 	}
 	return nil
 }
@@ -79,7 +94,7 @@ func ValidatePasswordInput(input string) error {
 			unicode.IsNumber(char) ||
 			unicode.IsPunct(char) ||
 			unicode.IsSymbol(char)):
-			return errors.New("password must only contain alphanumeric characters, punctuation, or symbols")
+			return errors.New("password must only contain unicode alphanumeric characters, numbers, or unicode symbols")
 		case unicode.IsLetter(char):
 			hasLetter = true
 		case unicode.IsNumber(char):
@@ -89,15 +104,21 @@ func ValidatePasswordInput(input string) error {
 		}
 	}
 	if !(hasMinLen && hasLetter && hasNumber && hasSpecial) {
-		return errors.New(
-			"password must have more than 8 characters, at least 1 special character, and 1 number",
-		)
+		return errPasswordWeak
 	}
 	strength := strongPasswords.PasswordStrength(input, nil)
 	if strength.Score < minPasswordScore {
 		return errors.New(
 			"password is too easy to guess, try a stronger password",
 		)
+	}
+	return nil
+}
+
+// ValidatePhrase checks whether the user input is equal to the wanted phrase. The verification is case sensitive.
+func ValidatePhrase(input, wantedPhrase string) error {
+	if strings.TrimSpace(input) != wantedPhrase {
+		return errIncorrectPhrase
 	}
 	return nil
 }

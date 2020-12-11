@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
@@ -65,18 +64,34 @@ func (s *State) MigrateToCold(ctx context.Context, fRoot [32]byte) error {
 				if len(blks) != 1 {
 					return errUnknownBlock
 				}
-				missingRoot, err := stateutil.BlockRoot(blks[0].Block)
-				if err != nil {
-					return err
-				}
-				missingState, err := s.StateByRoot(ctx, missingRoot)
+				missingRoot, err := blks[0].Block.HashTreeRoot()
 				if err != nil {
 					return err
 				}
 				aRoot = missingRoot
-				aState = missingState
+				// There's no need to generate the state if the state already exists on the DB.
+				// We can skip saving the state.
+				if !s.beaconDB.HasState(ctx, aRoot) {
+					aState, err = s.StateByRoot(ctx, missingRoot)
+					if err != nil {
+						return err
+					}
+				}
 			}
+
 			if s.beaconDB.HasState(ctx, aRoot) {
+				// Remove hot state DB root to prevent it gets deleted later when we turn hot state save DB mode off.
+				s.saveHotStateDB.lock.Lock()
+				roots := s.saveHotStateDB.savedStateRoots
+				for i := 0; i < len(roots); i++ {
+					if aRoot == roots[i] {
+						s.saveHotStateDB.savedStateRoots = append(roots[:i], roots[i+1:]...)
+						// There shouldn't be duplicated roots in `savedStateRoots`.
+						// Break here is ok.
+						break
+					}
+				}
+				s.saveHotStateDB.lock.Unlock()
 				continue
 			}
 
@@ -92,10 +107,9 @@ func (s *State) MigrateToCold(ctx context.Context, fRoot [32]byte) error {
 	}
 
 	// Migrate all state summary objects from state summary cache to DB.
-	if err := s.beaconDB.SaveStateSummaries(ctx, s.stateSummaryCache.GetAll()); err != nil {
+	if err := s.SaveStateSummariesToDB(ctx); err != nil {
 		return err
 	}
-	s.stateSummaryCache.Clear()
 
 	// Update finalized info in memory.
 	fInfo, ok, err := s.epochBoundaryStateCache.getByRoot(fRoot)

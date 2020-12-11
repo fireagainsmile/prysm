@@ -11,14 +11,11 @@ import (
 	"github.com/prysmaticlabs/go-bitfield"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	validatorpb "github.com/prysmaticlabs/prysm/proto/validator/accounts/v2"
-	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
 	"github.com/prysmaticlabs/prysm/shared/slotutil"
-	keymanager "github.com/prysmaticlabs/prysm/validator/keymanager/v1"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
 )
@@ -67,14 +64,14 @@ func (v *validator) SubmitAttestation(ctx context.Context, slot uint64, pubKey [
 		Data:             data,
 	}
 	if err := v.preAttSignValidations(ctx, indexedAtt, pubKey); err != nil {
-		log.WithFields(logrus.Fields{
-			"sourceEpoch": indexedAtt.Data.Source.Epoch,
-			"targetEpoch": indexedAtt.Data.Target.Epoch,
-		}).WithError(err).Error("Failed attestation safety check")
+		log.WithError(err).Error("Failed attestation slashing protection check")
+		log.WithFields(
+			attestationLogFields(pubKey, indexedAtt),
+		).Debug("Attempted slashable attestation details")
 		return
 	}
 
-	sig, err := v.signAtt(ctx, pubKey, data)
+	sig, signingRoot, err := v.signAtt(ctx, pubKey, data)
 	if err != nil {
 		log.WithError(err).Error("Could not sign attestation")
 		if v.emitAccountMetrics {
@@ -109,14 +106,16 @@ func (v *validator) SubmitAttestation(ctx context.Context, slot uint64, pubKey [
 	}
 
 	indexedAtt.Signature = sig
-	if err := v.postAttSignUpdate(ctx, indexedAtt, pubKey); err != nil {
-		log.WithFields(logrus.Fields{
-			"sourceEpoch": indexedAtt.Data.Source.Epoch,
-			"targetEpoch": indexedAtt.Data.Target.Epoch,
-		}).WithError(err).Error("Failed post attestation signing updates")
+	if err := v.postAttSignUpdate(ctx, indexedAtt, pubKey, signingRoot); err != nil {
+		log.WithError(err).Error("Failed attestation slashing protection check")
+		log.WithFields(
+			attestationLogFields(pubKey, indexedAtt),
+		).Debug("Attempted slashable attestation details")
 		return
 	}
-
+	if err := v.SaveProtection(ctx, pubKey); err != nil {
+		log.WithError(err).Errorf("Could not save validator: %#x protection", pubKey)
+	}
 	attResp, err := v.validatorClient.ProposeAttestation(ctx, attestation)
 	if err != nil {
 		log.WithError(err).Error("Could not submit attestation to beacon node")
@@ -146,6 +145,7 @@ func (v *validator) SubmitAttestation(ctx context.Context, slot uint64, pubKey [
 
 	if v.emitAccountMetrics {
 		ValidatorAttestSuccessVec.WithLabelValues(fmtKey).Inc()
+		ValidatorAttestedSlotsGaugeVec.WithLabelValues(fmtKey).Set(float64(slot))
 	}
 }
 
@@ -164,36 +164,36 @@ func (v *validator) duty(pubKey [48]byte) (*ethpb.DutiesResponse_Duty, error) {
 	return nil, fmt.Errorf("pubkey %#x not in duties", bytesutil.Trunc(pubKey[:]))
 }
 
-// Given validator's public key, this returns the signature of an attestation data.
-func (v *validator) signAtt(ctx context.Context, pubKey [48]byte, data *ethpb.AttestationData) ([]byte, error) {
+// Given validator's public key, this function returns the signature of an attestation data and its signing root.
+func (v *validator) signAtt(ctx context.Context, pubKey [48]byte, data *ethpb.AttestationData) ([]byte, [32]byte, error) {
+	domain, root, err := v.getDomainAndSigningRoot(ctx, data)
+	if err != nil {
+		return nil, [32]byte{}, err
+	}
+
+	sig, err := v.keyManager.Sign(ctx, &validatorpb.SignRequest{
+		PublicKey:       pubKey[:],
+		SigningRoot:     root[:],
+		SignatureDomain: domain.SignatureDomain,
+		Object:          &validatorpb.SignRequest_AttestationData{AttestationData: data},
+	})
+	if err != nil {
+		return nil, [32]byte{}, err
+	}
+
+	return sig.Marshal(), root, nil
+}
+
+func (v *validator) getDomainAndSigningRoot(ctx context.Context, data *ethpb.AttestationData) (*ethpb.DomainResponse, [32]byte, error) {
 	domain, err := v.domainData(ctx, data.Target.Epoch, params.BeaconConfig().DomainBeaconAttester[:])
 	if err != nil {
-		return nil, err
+		return nil, [32]byte{}, err
 	}
-
 	root, err := helpers.ComputeSigningRoot(data, domain.SignatureDomain)
 	if err != nil {
-		return nil, err
+		return nil, [32]byte{}, err
 	}
-
-	var sig bls.Signature
-	if featureconfig.Get().EnableAccountsV2 {
-		sig, err = v.keyManagerV2.Sign(ctx, &validatorpb.SignRequest{
-			PublicKey:   pubKey[:],
-			SigningRoot: root[:],
-		})
-	} else {
-		if protectingKeymanager, supported := v.keyManager.(keymanager.ProtectingKeyManager); supported {
-			sig, err = protectingKeymanager.SignAttestation(pubKey, bytesutil.ToBytes32(domain.SignatureDomain), data)
-		} else {
-			sig, err = v.keyManager.Sign(pubKey, root)
-		}
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return sig.Marshal(), nil
+	return domain, root, nil
 }
 
 // For logging, this saves the last submitted attester index to its attestation data. The purpose of this
@@ -224,5 +224,19 @@ func (v *validator) waitToSlotOneThird(ctx context.Context, slot uint64) {
 	delay := slotutil.DivideSlotBy(3 /* a third of the slot duration */)
 	startTime := slotutil.SlotStartTime(v.genesisTime, slot)
 	finalTime := startTime.Add(delay)
-	time.Sleep(roughtime.Until(finalTime))
+	time.Sleep(timeutils.Until(finalTime))
+}
+
+func attestationLogFields(pubKey [48]byte, indexedAtt *ethpb.IndexedAttestation) logrus.Fields {
+	return logrus.Fields{
+		"attesterPublicKey": fmt.Sprintf("%#x", pubKey),
+		"attestationSlot":   indexedAtt.Data.Slot,
+		"committeeIndex":    indexedAtt.Data.CommitteeIndex,
+		"beaconBlockRoot":   fmt.Sprintf("%#x", indexedAtt.Data.BeaconBlockRoot),
+		"sourceEpoch":       indexedAtt.Data.Source.Epoch,
+		"sourceRoot":        fmt.Sprintf("%#x", indexedAtt.Data.Source.Root),
+		"targetEpoch":       indexedAtt.Data.Target.Epoch,
+		"targetRoot":        fmt.Sprintf("%#x", indexedAtt.Data.Target.Root),
+		"signature":         fmt.Sprintf("%#x", indexedAtt.Signature),
+	}
 }

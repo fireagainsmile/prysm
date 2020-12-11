@@ -9,7 +9,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
+	p2ptypes "github.com/prysmaticlabs/prysm/beacon-chain/p2p/types"
 	"github.com/sirupsen/logrus"
+	"github.com/trailofbits/go-mutexasserts"
 )
 
 const defaultBurstLimit = 5
@@ -67,7 +69,6 @@ func (l *limiter) validateRequest(stream network.Stream, amt uint64) error {
 	defer l.RUnlock()
 
 	topic := string(stream.Protocol())
-	log := l.topicLogger(topic)
 
 	collector, err := l.retrieveCollector(topic)
 	if err != nil {
@@ -75,18 +76,14 @@ func (l *limiter) validateRequest(stream network.Stream, amt uint64) error {
 	}
 	key := stream.Conn().RemotePeer().String()
 	remaining := collector.Remaining(key)
+	// Treat each request as a minimum of 1.
+	if amt == 0 {
+		amt = 1
+	}
 	if amt > uint64(remaining) {
 		l.p2p.Peers().Scorers().BadResponsesScorer().Increment(stream.Conn().RemotePeer())
-		if l.p2p.Peers().IsBad(stream.Conn().RemotePeer()) {
-			log.Debug("Disconnecting bad peer")
-			defer func() {
-				if err := l.p2p.Disconnect(stream.Conn().RemotePeer()); err != nil {
-					log.WithError(err).Debug("Failed to disconnect peer")
-				}
-			}()
-		}
-		writeErrorResponseToStream(responseCodeInvalidRequest, rateLimitedError, stream, l.p2p)
-		return errors.New(rateLimitedError)
+		writeErrorResponseToStream(responseCodeInvalidRequest, p2ptypes.ErrRateLimited.Error(), stream, l.p2p)
+		return p2ptypes.ErrRateLimited
 	}
 	return nil
 }
@@ -133,6 +130,9 @@ func (l *limiter) free() {
 // not to be used outside the rate limiter file as it is unsafe for concurrent usage
 // and is protected by a lock on all of its usages here.
 func (l *limiter) retrieveCollector(topic string) (*leakybucket.Collector, error) {
+	if !mutexasserts.RWMutexLocked(&l.RWMutex) && !mutexasserts.RWMutexRLocked(&l.RWMutex) {
+		return nil, errors.New("limiter.retrieveCollector: caller must hold read/write lock")
+	}
 	collector, ok := l.limiterMap[topic]
 	if !ok {
 		return nil, errors.Errorf("collector does not exist for topic %s", topic)

@@ -15,12 +15,13 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
+	"github.com/prysmaticlabs/prysm/shared/journald"
 	"github.com/prysmaticlabs/prysm/shared/logutil"
 	_ "github.com/prysmaticlabs/prysm/shared/maxprocs"
+	"github.com/prysmaticlabs/prysm/shared/tos"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
-	"github.com/urfave/cli/v2/altsrc"
 	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 )
 
@@ -34,12 +35,12 @@ var appFlags = []cli.Flag{
 	flags.DisableGRPCGateway,
 	flags.GRPCGatewayHost,
 	flags.GRPCGatewayPort,
+	flags.GPRCGatewayCorsDomain,
 	flags.MinSyncPeers,
 	flags.ContractDeploymentBlock,
 	flags.SetGCPercent,
-	flags.UnsafeSync,
-	flags.SlasherCertFlag,
-	flags.SlasherProviderFlag,
+	flags.HeadSync,
+	flags.DisableSync,
 	flags.DisableDiscv5,
 	flags.BlockBatchLimit,
 	flags.BlockBatchLimitBurstFactor,
@@ -49,7 +50,14 @@ var appFlags = []cli.Flag{
 	flags.InteropGenesisTimeFlag,
 	flags.SlotsPerArchivedPoint,
 	flags.EnableDebugRPCEndpoints,
+	flags.SubscribeToAllSubnets,
 	flags.HistoricalSlasherNode,
+	flags.ChainID,
+	flags.NetworkID,
+	flags.WeakSubjectivityCheckpt,
+	flags.Eth1HeaderReqLimit,
+	cmd.EnableBackupWebhookFlag,
+	cmd.BackupWebhookOutputDir,
 	cmd.MinimalConfigFlag,
 	cmd.E2EConfigFlag,
 	cmd.RPCMaxPageSizeFlag,
@@ -91,6 +99,7 @@ var appFlags = []cli.Flag{
 	cmd.ConfigFileFlag,
 	cmd.ChainConfigFileFlag,
 	cmd.GrpcMaxCallRecvMsgSizeFlag,
+	cmd.AcceptTosFlag,
 }
 
 func init() {
@@ -108,11 +117,9 @@ func main() {
 	app.Flags = appFlags
 
 	app.Before = func(ctx *cli.Context) error {
-		// Load any flags from file, if specified.
-		if ctx.IsSet(cmd.ConfigFileFlag.Name) {
-			if err := altsrc.InitInputSourceWithContext(appFlags, altsrc.NewYamlSourceFromFlagFunc(cmd.ConfigFileFlag.Name))(ctx); err != nil {
-				return err
-			}
+		// Load flags from config file, if specified.
+		if err := cmd.LoadFlagsFromConfig(ctx, app.Flags); err != nil {
+			return err
 		}
 
 		format := ctx.String(cmd.LogFormat.Name)
@@ -133,6 +140,10 @@ func main() {
 			logrus.SetFormatter(f)
 		case "json":
 			logrus.SetFormatter(&logrus.JSONFormatter{})
+		case "journald":
+			if err := journald.Enable(); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unknown log format %s", format)
 		}
@@ -142,6 +153,10 @@ func main() {
 			if err := logutil.ConfigurePersistentLogging(logFileName); err != nil {
 				log.WithError(err).Error("Failed to configuring logging to disk.")
 			}
+		}
+
+		if err := cmd.ExpandWeb3EndpointIfFile(ctx, flags.HTTPWeb3ProviderFlag); err != nil {
+			return err
 		}
 
 		if ctx.IsSet(flags.SetGCPercent.Name) {
@@ -160,11 +175,15 @@ func main() {
 
 	if err := app.Run(os.Args); err != nil {
 		log.Error(err.Error())
-		os.Exit(1)
 	}
 }
 
 func startNode(ctx *cli.Context) error {
+	// verify if ToS accepted
+	if err := tos.VerifyTosAcceptedOrPrompt(ctx); err != nil {
+		return err
+	}
+
 	verbosity := ctx.String(cmd.VerbosityFlag.Name)
 	level, err := logrus.ParseLevel(verbosity)
 	if err != nil {

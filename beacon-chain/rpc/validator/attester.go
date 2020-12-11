@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	ptypes "github.com/gogo/protobuf/types"
@@ -12,10 +13,8 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"go.opencensus.io/trace"
 	"google.golang.org/grpc/codes"
@@ -45,14 +44,12 @@ func (vs *Server) GetAttestationData(ctx context.Context, req *ethpb.Attestation
 		return nil, status.Errorf(codes.Internal, "Could not retrieve data from attestation cache: %v", err)
 	}
 	if res != nil {
-		if featureconfig.Get().ReduceAttesterStateCopy {
-			res.CommitteeIndex = req.CommitteeIndex
-		}
+		res.CommitteeIndex = req.CommitteeIndex
 		return res, nil
 	}
 
 	if err := vs.AttestationCache.MarkInProgress(req); err != nil {
-		if err == cache.ErrAlreadyInProgress {
+		if errors.Is(err, cache.ErrAlreadyInProgress) {
 			res, err := vs.AttestationCache.Get(ctx, req)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "Could not retrieve data from attestation cache: %v", err)
@@ -60,16 +57,14 @@ func (vs *Server) GetAttestationData(ctx context.Context, req *ethpb.Attestation
 			if res == nil {
 				return nil, status.Error(codes.DataLoss, "A request was in progress and resolved to nil")
 			}
-			if featureconfig.Get().ReduceAttesterStateCopy {
-				res.CommitteeIndex = req.CommitteeIndex
-			}
+			res.CommitteeIndex = req.CommitteeIndex
 			return res, nil
 		}
 		return nil, status.Errorf(codes.Internal, "Could not mark attestation as in-progress: %v", err)
 	}
 	defer func() {
 		if err := vs.AttestationCache.MarkNotInProgress(req); err != nil {
-			log.WithError(err).Error("Failed to mark cache not in progress")
+			log.WithError(err).Error("Could not mark cache not in progress")
 		}
 	}()
 
@@ -94,21 +89,24 @@ func (vs *Server) GetAttestationData(ctx context.Context, req *ethpb.Attestation
 		}
 	}
 	if headState == nil {
-		return nil, status.Error(codes.Internal, "Failed to lookup parent state from head.")
+		return nil, status.Error(codes.Internal, "Could not lookup parent state from head.")
 	}
 
 	if helpers.CurrentEpoch(headState) < helpers.SlotToEpoch(req.Slot) {
-		headState, err = state.ProcessSlots(ctx, headState, helpers.StartSlot(helpers.SlotToEpoch(req.Slot)))
+		headState, err = state.ProcessSlots(ctx, headState, req.Slot)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not process slots up to %d: %v", req.Slot, err)
 		}
 	}
 
 	targetEpoch := helpers.CurrentEpoch(headState)
-	epochStartSlot := helpers.StartSlot(targetEpoch)
-	targetRoot := make([]byte, 32)
+	epochStartSlot, err := helpers.StartSlot(targetEpoch)
+	if err != nil {
+		return nil, err
+	}
+	var targetRoot []byte
 	if epochStartSlot == headState.Slot() {
-		targetRoot = headRoot[:]
+		targetRoot = headRoot
 	} else {
 		targetRoot, err = helpers.BlockRootAtSlot(headState, epochStartSlot)
 		if err != nil {
@@ -122,7 +120,7 @@ func (vs *Server) GetAttestationData(ctx context.Context, req *ethpb.Attestation
 	res = &ethpb.AttestationData{
 		Slot:            req.Slot,
 		CommitteeIndex:  req.CommitteeIndex,
-		BeaconBlockRoot: headRoot[:],
+		BeaconBlockRoot: headRoot,
 		Source:          headState.CurrentJustifiedCheckpoint(),
 		Target: &ethpb.Checkpoint{
 			Epoch: targetEpoch,
@@ -146,7 +144,7 @@ func (vs *Server) ProposeAttestation(ctx context.Context, att *ethpb.Attestation
 		return nil, status.Error(codes.InvalidArgument, "Incorrect attestation signature")
 	}
 
-	root, err := stateutil.AttestationDataRoot(att.Data)
+	root, err := att.Data.HashTreeRoot()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not tree hash attestation: %v", err)
 	}

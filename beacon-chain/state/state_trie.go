@@ -8,11 +8,9 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
-	coreutils "github.com/prysmaticlabs/prysm/beacon-chain/core/state/stateutils"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 	"github.com/prysmaticlabs/prysm/shared/htrutils"
 	"github.com/prysmaticlabs/prysm/shared/params"
@@ -42,7 +40,7 @@ func InitializeFromProtoUnsafe(st *pbp2p.BeaconState) (*BeaconState, error) {
 		stateFieldLeaves:      make(map[fieldIndex]*FieldTrie, fieldCount),
 		sharedFieldReferences: make(map[fieldIndex]*reference, 10),
 		rebuildTrie:           make(map[fieldIndex]bool, fieldCount),
-		valIdxMap:             coreutils.ValidatorIndexMap(st.Validators),
+		valMapHandler:         newValHandler(st.Validators),
 	}
 
 	for i := 0; i < fieldCount; i++ {
@@ -76,97 +74,57 @@ func (b *BeaconState) Copy() *BeaconState {
 	if !b.HasInnerState() {
 		return nil
 	}
-	var dst *BeaconState
-	if featureconfig.Get().NewBeaconStateLocks {
-		b.lock.RLock()
-		defer b.lock.RUnlock()
-		dst = &BeaconState{
-			state: &pbp2p.BeaconState{
-				// Primitive types, safe to copy.
-				GenesisTime:      b.state.GenesisTime,
-				Slot:             b.state.Slot,
-				Eth1DepositIndex: b.state.Eth1DepositIndex,
 
-				// Large arrays, infrequently changed, constant size.
-				RandaoMixes:               b.state.RandaoMixes,
-				StateRoots:                b.state.StateRoots,
-				BlockRoots:                b.state.BlockRoots,
-				PreviousEpochAttestations: b.state.PreviousEpochAttestations,
-				CurrentEpochAttestations:  b.state.CurrentEpochAttestations,
-				Slashings:                 b.state.Slashings,
-				Eth1DataVotes:             b.state.Eth1DataVotes,
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+	dst := &BeaconState{
+		state: &pbp2p.BeaconState{
+			// Primitive types, safe to copy.
+			GenesisTime:      b.state.GenesisTime,
+			Slot:             b.state.Slot,
+			Eth1DepositIndex: b.state.Eth1DepositIndex,
 
-				// Large arrays, increases over time.
-				Validators:      b.state.Validators,
-				Balances:        b.state.Balances,
-				HistoricalRoots: b.state.HistoricalRoots,
+			// Large arrays, infrequently changed, constant size.
+			RandaoMixes:               b.state.RandaoMixes,
+			StateRoots:                b.state.StateRoots,
+			BlockRoots:                b.state.BlockRoots,
+			PreviousEpochAttestations: b.state.PreviousEpochAttestations,
+			CurrentEpochAttestations:  b.state.CurrentEpochAttestations,
+			Slashings:                 b.state.Slashings,
+			Eth1DataVotes:             b.state.Eth1DataVotes,
 
-				// Everything else, too small to be concerned about, constant size.
-				Fork:                        b.fork(),
-				LatestBlockHeader:           b.latestBlockHeader(),
-				Eth1Data:                    b.eth1Data(),
-				JustificationBits:           b.justificationBits(),
-				PreviousJustifiedCheckpoint: b.previousJustifiedCheckpoint(),
-				CurrentJustifiedCheckpoint:  b.currentJustifiedCheckpoint(),
-				FinalizedCheckpoint:         b.finalizedCheckpoint(),
-				GenesisValidatorsRoot:       b.genesisValidatorRoot(),
-			},
-			dirtyFields:           make(map[fieldIndex]interface{}, fieldCount),
-			dirtyIndices:          make(map[fieldIndex][]uint64, fieldCount),
-			rebuildTrie:           make(map[fieldIndex]bool, fieldCount),
-			sharedFieldReferences: make(map[fieldIndex]*reference, 10),
-			stateFieldLeaves:      make(map[fieldIndex]*FieldTrie, fieldCount),
+			// Large arrays, increases over time.
+			Validators:      b.state.Validators,
+			Balances:        b.state.Balances,
+			HistoricalRoots: b.state.HistoricalRoots,
 
-			// Copy on write validator index map.
-			valIdxMap: b.valIdxMap,
-		}
-	} else {
-		dst = &BeaconState{
-			state: &pbp2p.BeaconState{
-				// Primitive types, safe to copy.
-				GenesisTime:      b.state.GenesisTime,
-				Slot:             b.state.Slot,
-				Eth1DepositIndex: b.state.Eth1DepositIndex,
+			// Everything else, too small to be concerned about, constant size.
+			Fork:                        b.fork(),
+			LatestBlockHeader:           b.latestBlockHeader(),
+			Eth1Data:                    b.eth1Data(),
+			JustificationBits:           b.justificationBits(),
+			PreviousJustifiedCheckpoint: b.previousJustifiedCheckpoint(),
+			CurrentJustifiedCheckpoint:  b.currentJustifiedCheckpoint(),
+			FinalizedCheckpoint:         b.finalizedCheckpoint(),
+			GenesisValidatorsRoot:       b.genesisValidatorRoot(),
+		},
+		dirtyFields:           make(map[fieldIndex]interface{}, fieldCount),
+		dirtyIndices:          make(map[fieldIndex][]uint64, fieldCount),
+		rebuildTrie:           make(map[fieldIndex]bool, fieldCount),
+		sharedFieldReferences: make(map[fieldIndex]*reference, 10),
+		stateFieldLeaves:      make(map[fieldIndex]*FieldTrie, fieldCount),
 
-				// Large arrays, infrequently changed, constant size.
-				RandaoMixes:               b.state.RandaoMixes,
-				StateRoots:                b.state.StateRoots,
-				BlockRoots:                b.state.BlockRoots,
-				PreviousEpochAttestations: b.state.PreviousEpochAttestations,
-				CurrentEpochAttestations:  b.state.CurrentEpochAttestations,
-				Slashings:                 b.state.Slashings,
-				Eth1DataVotes:             b.state.Eth1DataVotes,
-
-				// Large arrays, increases over time.
-				Validators:      b.state.Validators,
-				Balances:        b.state.Balances,
-				HistoricalRoots: b.state.HistoricalRoots,
-
-				// Everything else, too small to be concerned about, constant size.
-				Fork:                        b.Fork(),
-				LatestBlockHeader:           b.LatestBlockHeader(),
-				Eth1Data:                    b.Eth1Data(),
-				JustificationBits:           b.JustificationBits(),
-				PreviousJustifiedCheckpoint: b.PreviousJustifiedCheckpoint(),
-				CurrentJustifiedCheckpoint:  b.CurrentJustifiedCheckpoint(),
-				FinalizedCheckpoint:         b.FinalizedCheckpoint(),
-				GenesisValidatorsRoot:       b.GenesisValidatorRoot(),
-			},
-			dirtyFields:           make(map[fieldIndex]interface{}, fieldCount),
-			dirtyIndices:          make(map[fieldIndex][]uint64, fieldCount),
-			rebuildTrie:           make(map[fieldIndex]bool, fieldCount),
-			sharedFieldReferences: make(map[fieldIndex]*reference, 10),
-			stateFieldLeaves:      make(map[fieldIndex]*FieldTrie, fieldCount),
-
-			// Copy on write validator index map.
-			valIdxMap: b.valIdxMap,
-		}
+		// Copy on write validator index map.
+		valMapHandler: b.valMapHandler,
 	}
 
 	for field, ref := range b.sharedFieldReferences {
 		ref.AddRef()
 		dst.sharedFieldReferences[field] = ref
 	}
+
+	// Increment ref for validator map
+	b.valMapHandler.mapRef.AddRef()
 
 	for i := range b.dirtyFields {
 		dst.dirtyFields[i] = true
@@ -244,6 +202,25 @@ func (b *BeaconState) HashTreeRoot(ctx context.Context) ([32]byte, error) {
 		delete(b.dirtyFields, field)
 	}
 	return bytesutil.ToBytes32(b.merkleLayers[len(b.merkleLayers)-1][0]), nil
+}
+
+// FieldReferencesCount returns the reference count held by each field. This
+// also includes the field trie held by each field.
+func (b *BeaconState) FieldReferencesCount() map[string]uint64 {
+	refMap := make(map[string]uint64)
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+	for i, f := range b.sharedFieldReferences {
+		refMap[i.String()] = uint64(f.Refs())
+	}
+	for i, f := range b.stateFieldLeaves {
+		f.lock.RLock()
+		if len(f.fieldLayers) != 0 {
+			refMap[i.String()+"_trie"] = uint64(f.Refs())
+		}
+		f.lock.RUnlock()
+	}
+	return refMap
 }
 
 // Merkleize 32-byte leaves into a Merkle trie for its adequate depth, returning
@@ -391,7 +368,7 @@ func (b *BeaconState) rootSelector(field fieldIndex) ([32]byte, error) {
 
 func (b *BeaconState) recomputeFieldTrie(index fieldIndex, elements interface{}) ([32]byte, error) {
 	fTrie := b.stateFieldLeaves[index]
-	if fTrie.refs > 1 {
+	if fTrie.Refs() > 1 {
 		fTrie.Lock()
 		defer fTrie.Unlock()
 		fTrie.MinusRef()
@@ -410,14 +387,11 @@ func (b *BeaconState) recomputeFieldTrie(index fieldIndex, elements interface{})
 		return [32]byte{}, err
 	}
 	b.dirtyIndices[index] = []uint64{}
-
 	return root, nil
 }
 
 func (b *BeaconState) resetFieldTrie(index fieldIndex, elements interface{}, length uint64) error {
-	fTrie := b.stateFieldLeaves[index]
-	var err error
-	fTrie, err = NewFieldTrie(index, elements, length)
+	fTrie, err := NewFieldTrie(index, elements, length)
 	if err != nil {
 		return err
 	}

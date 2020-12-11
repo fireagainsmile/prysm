@@ -51,4 +51,16 @@ var (
 		Name:  "enable-historical-detection",
 		Usage: "Enables historical attestation detection for the slasher. Requires --historical-slasher-node on the beacon node.",
 	}
+	// SpanCacheSize is a flag that sets the size of span cache.
+	SpanCacheSize = &cli.IntFlag{
+		Name:  "spans-cache-size",
+		Usage: "Sets the span cache size.",
+		Value: 1500,
+	}
+	// HighestAttCacheSize is a flag that sets the size of highest attestation cache.
+	HighestAttCacheSize = &cli.IntFlag{
+		Name:  "highest-att-cache-size",
+		Usage: "Sets the highest attestation cache size.",
+		Value: 3000,
+	}
 )

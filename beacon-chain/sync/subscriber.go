@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"runtime/debug"
@@ -13,8 +12,8 @@ import (
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/messagehandler"
 	"github.com/prysmaticlabs/prysm/shared/p2putils"
 	"github.com/prysmaticlabs/prysm/shared/params"
@@ -26,19 +25,14 @@ import (
 
 const pubsubMessageTimeout = 30 * time.Second
 
-var (
-	// TODO(6449): Replace this with pubsub.ErrSubscriptionCancelled.
-	errSubscriptionCancelled = errors.New("subscription cancelled by calling sub.Cancel()")
-)
-
 // subHandler represents handler for a given subscription.
 type subHandler func(context.Context, proto.Message) error
 
 // noopValidator is a no-op that only decodes the message, but does not check its contents.
-func (s *Service) noopValidator(ctx context.Context, _ peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+func (s *Service) noopValidator(_ context.Context, _ peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
 	m, err := s.decodePubsubMessage(msg)
 	if err != nil {
-		log.WithError(err).Debug("Failed to decode message")
+		log.WithError(err).Debug("Could not decode message")
 		return pubsub.ValidationReject
 	}
 	msg.ValidatorData = m
@@ -72,7 +66,7 @@ func (s *Service) registerSubscribers() {
 		s.validateAttesterSlashing,
 		s.attesterSlashingSubscriber,
 	)
-	if featureconfig.Get().DisableDynamicCommitteeSubnets {
+	if flags.Get().SubscribeToAllSubnets {
 		s.subscribeStaticWithSubnets(
 			"/eth2/%x/beacon_attestation_%d",
 			s.validateCommitteeIndexBeaconAttestation,   /* validator */
@@ -94,29 +88,31 @@ func (s *Service) subscribe(topic string, validator pubsub.ValidatorEx, handle s
 	if base == nil {
 		panic(fmt.Sprintf("%s is not mapped to any message in GossipTopicMappings", topic))
 	}
-	return s.subscribeWithBase(base, s.addDigestToTopic(topic), validator, handle)
+	return s.subscribeWithBase(s.addDigestToTopic(topic), validator, handle)
 }
 
-func (s *Service) subscribeWithBase(base proto.Message, topic string, validator pubsub.ValidatorEx, handle subHandler) *pubsub.Subscription {
+func (s *Service) subscribeWithBase(topic string, validator pubsub.ValidatorEx, handle subHandler) *pubsub.Subscription {
 	topic += s.p2p.Encoding().ProtocolSuffix()
 	log := log.WithField("topic", topic)
 
-	if err := s.p2p.PubSub().RegisterTopicValidator(wrapAndReportValidation(topic, validator)); err != nil {
-		log.WithError(err).Error("Failed to register validator")
+	if err := s.p2p.PubSub().RegisterTopicValidator(s.wrapAndReportValidation(topic, validator)); err != nil {
+		log.WithError(err).Error("Could not register validator for topic")
+		return nil
 	}
 
 	sub, err := s.p2p.SubscribeToTopic(topic)
 	if err != nil {
 		// Any error subscribing to a PubSub topic would be the result of a misconfiguration of
-		// libp2p PubSub library. This should not happen at normal runtime, unless the config
-		// changes to a fatal configuration.
-		panic(err)
+		// libp2p PubSub library or a subscription request to a topic that fails to match the topic
+		// subscription filter.
+		log.WithError(err).WithField("topic", topic).Error("Could not subscribe topic")
+		return nil
 	}
 
 	// Pipeline decodes the incoming subscription data, runs the validation, and handles the
 	// message.
 	pipeline := func(msg *pubsub.Message) {
-		ctx, cancel := context.WithTimeout(context.Background(), pubsubMessageTimeout)
+		ctx, cancel := context.WithTimeout(s.ctx, pubsubMessageTimeout)
 		defer cancel()
 		ctx, span := trace.StartSpan(ctx, "sync.pubsub")
 		defer span.End()
@@ -139,7 +135,7 @@ func (s *Service) subscribeWithBase(base proto.Message, topic string, validator 
 
 		if err := handle(ctx, msg.ValidatorData.(proto.Message)); err != nil {
 			traceutil.AnnotateError(span, err)
-			log.WithError(err).Debug("Failed to handle p2p pubsub")
+			log.WithError(err).Debug("Could not handle p2p pubsub")
 			messageFailedProcessingCounter.WithLabelValues(topic).Inc()
 			return
 		}
@@ -151,9 +147,12 @@ func (s *Service) subscribeWithBase(base proto.Message, topic string, validator 
 			msg, err := sub.Next(s.ctx)
 			if err != nil {
 				// This should only happen when the context is cancelled or subscription is cancelled.
-				if err != errSubscriptionCancelled { // Only log a warning on unexpected errors.
+				if err != pubsub.ErrSubscriptionCancelled { // Only log a warning on unexpected errors.
 					log.WithError(err).Warn("Subscription next failed")
 				}
+				// Cancel subscription in the event of an error, as we are
+				// now exiting topic event loop.
+				sub.Cancel()
 				return
 			}
 
@@ -171,12 +170,22 @@ func (s *Service) subscribeWithBase(base proto.Message, topic string, validator 
 
 // Wrap the pubsub validator with a metric monitoring function. This function increments the
 // appropriate counter if the particular message fails to validate.
-func wrapAndReportValidation(topic string, v pubsub.ValidatorEx) (string, pubsub.ValidatorEx) {
-	return topic, func(ctx context.Context, pid peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+func (s *Service) wrapAndReportValidation(topic string, v pubsub.ValidatorEx) (string, pubsub.ValidatorEx) {
+	return topic, func(ctx context.Context, pid peer.ID, msg *pubsub.Message) (res pubsub.ValidationResult) {
 		defer messagehandler.HandlePanic(ctx, msg)
+		res = pubsub.ValidationIgnore // Default: ignore any message that panics.
 		ctx, cancel := context.WithTimeout(ctx, pubsubMessageTimeout)
 		defer cancel()
 		messageReceivedCounter.WithLabelValues(topic).Inc()
+		if msg.Topic == nil {
+			messageFailedValidationCounter.WithLabelValues(topic).Inc()
+			return pubsub.ValidationReject
+		}
+		// Ignore any messages received before chainstart.
+		if s.chainStarted.IsNotSet() {
+			messageFailedValidationCounter.WithLabelValues(topic).Inc()
+			return pubsub.ValidationIgnore
+		}
 		b := v(ctx, pid, msg)
 		if b == pubsub.ValidationReject {
 			messageFailedValidationCounter.WithLabelValues(topic).Inc()
@@ -193,7 +202,7 @@ func (s *Service) subscribeStaticWithSubnets(topic string, validator pubsub.Vali
 		panic(fmt.Sprintf("%s is not mapped to any message in GossipTopicMappings", topic))
 	}
 	for i := uint64(0); i < params.BeaconNetworkConfig().AttestationSubnetCount; i++ {
-		s.subscribeWithBase(base, s.addDigestAndIndexToTopic(topic, i), validator, handle)
+		s.subscribeWithBase(s.addDigestAndIndexToTopic(topic, i), validator, handle)
 	}
 	genesis := s.chain.GenesisTime()
 	ticker := slotutil.GetSlotTicker(genesis, params.BeaconConfig().SecondsPerSlot)
@@ -205,7 +214,7 @@ func (s *Service) subscribeStaticWithSubnets(topic string, validator pubsub.Vali
 				ticker.Done()
 				return
 			case <-ticker.C():
-				if s.chainStarted && s.initialSync.Syncing() {
+				if s.chainStarted.IsSet() && s.initialSync.Syncing() {
 					continue
 				}
 				// Check every slot that there are enough peers
@@ -214,7 +223,7 @@ func (s *Service) subscribeStaticWithSubnets(topic string, validator pubsub.Vali
 						log.Debugf("No peers found subscribed to attestation gossip subnet with "+
 							"committee index %d. Searching network for peers subscribed to the subnet.", i)
 						go func(idx uint64) {
-							_, err := s.p2p.FindPeersWithSubnet(idx)
+							_, err := s.p2p.FindPeersWithSubnet(s.ctx, idx)
 							if err != nil {
 								log.Debugf("Could not search for peers: %v", err)
 								return
@@ -255,7 +264,7 @@ func (s *Service) subscribeDynamicWithSubnets(
 				ticker.Done()
 				return
 			case currentSlot := <-ticker.C():
-				if s.chainStarted && s.initialSync.Syncing() {
+				if s.chainStarted.IsSet() && s.initialSync.Syncing() {
 					continue
 				}
 
@@ -271,7 +280,7 @@ func (s *Service) subscribeDynamicWithSubnets(
 
 				// subscribe desired aggregator subnets.
 				for _, idx := range wantedSubs {
-					s.subscribeAggregatorSubnet(subscriptions, idx, base, digest, validate, handle)
+					s.subscribeAggregatorSubnet(subscriptions, idx, digest, validate, handle)
 				}
 				// find desired subs for attesters
 				attesterSubs := s.attesterSubnetIndices(currentSlot)
@@ -298,7 +307,7 @@ func (s *Service) reValidateSubscriptions(subscriptions map[uint64]*pubsub.Subsc
 			v.Cancel()
 			fullTopic := fmt.Sprintf(topicFormat, digest, k) + s.p2p.Encoding().ProtocolSuffix()
 			if err := s.p2p.PubSub().UnregisterTopicValidator(fullTopic); err != nil {
-				log.WithError(err).Error("Failed to unregister topic validator")
+				log.WithError(err).Error("Could not unregister topic validator")
 			}
 			delete(subscriptions, k)
 		}
@@ -306,21 +315,26 @@ func (s *Service) reValidateSubscriptions(subscriptions map[uint64]*pubsub.Subsc
 }
 
 // subscribe missing subnets for our aggregators.
-func (s *Service) subscribeAggregatorSubnet(subscriptions map[uint64]*pubsub.Subscription, idx uint64,
-	base proto.Message, digest [4]byte, validate pubsub.ValidatorEx, handle subHandler) {
+func (s *Service) subscribeAggregatorSubnet(
+	subscriptions map[uint64]*pubsub.Subscription,
+	idx uint64,
+	digest [4]byte,
+	validate pubsub.ValidatorEx,
+	handle subHandler,
+) {
 	// do not subscribe if we have no peers in the same
 	// subnet
 	topic := p2p.GossipTypeMapping[reflect.TypeOf(&pb.Attestation{})]
 	subnetTopic := fmt.Sprintf(topic, digest, idx)
 	// check if subscription exists and if not subscribe the relevant subnet.
 	if _, exists := subscriptions[idx]; !exists {
-		subscriptions[idx] = s.subscribeWithBase(base, subnetTopic, validate, handle)
+		subscriptions[idx] = s.subscribeWithBase(subnetTopic, validate, handle)
 	}
 	if !s.validPeersExist(subnetTopic, idx) {
 		log.Debugf("No peers found subscribed to attestation gossip subnet with "+
 			"committee index %d. Searching network for peers subscribed to the subnet.", idx)
 		go func(idx uint64) {
-			_, err := s.p2p.FindPeersWithSubnet(idx)
+			_, err := s.p2p.FindPeersWithSubnet(s.ctx, idx)
 			if err != nil {
 				log.Debugf("Could not search for peers: %v", err)
 				return
@@ -339,7 +353,7 @@ func (s *Service) lookupAttesterSubnets(digest [4]byte, idx uint64) {
 			"committee index %d. Searching network for peers subscribed to the subnet.", idx)
 		go func(idx uint64) {
 			// perform a search for peers with the desired committee index.
-			_, err := s.p2p.FindPeersWithSubnet(idx)
+			_, err := s.p2p.FindPeersWithSubnet(s.ctx, idx)
 			if err != nil {
 				log.Debugf("Could not search for peers: %v", err)
 				return

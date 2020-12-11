@@ -25,14 +25,16 @@ import (
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache/depositcache"
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
 	contracts "github.com/prysmaticlabs/prysm/contracts/deposit-contract"
 	protodb "github.com/prysmaticlabs/prysm/proto/beacon/db"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"github.com/prysmaticlabs/prysm/shared/trieutil"
 	"github.com/sirupsen/logrus"
 )
@@ -57,6 +59,12 @@ var (
 // time to wait before trying to reconnect with the eth1 node.
 var backOffPeriod = 6 * time.Second
 
+// Amount of times before we log the status of the eth1 dial attempt.
+var logThreshold = 20
+
+// period to log chainstart related information
+var logPeriod = 1 * time.Minute
+
 // ChainStartFetcher retrieves information pertaining to the chain start event
 // of the beacon chain for usage across various services.
 type ChainStartFetcher interface {
@@ -78,6 +86,7 @@ type POWBlockFetcher interface {
 	BlockNumberByTimestamp(ctx context.Context, time uint64) (*big.Int, error)
 	BlockHashByHeight(ctx context.Context, height *big.Int) (common.Hash, error)
 	BlockExists(ctx context.Context, hash common.Hash) (bool, *big.Int, error)
+	BlockExistsWithCache(ctx context.Context, hash common.Hash) (bool, *big.Int, error)
 }
 
 // Chain defines a standard interface for the powchain service in Prysm.
@@ -99,8 +108,7 @@ type Client interface {
 // fetching eth1 data from the clients.
 type RPCDataFetcher interface {
 	HeaderByNumber(ctx context.Context, number *big.Int) (*gethTypes.Header, error)
-	BlockByNumber(ctx context.Context, number *big.Int) (*gethTypes.Block, error)
-	BlockByHash(ctx context.Context, hash common.Hash) (*gethTypes.Block, error)
+	HeaderByHash(ctx context.Context, hash common.Hash) (*gethTypes.Header, error)
 	SyncProgress(ctx context.Context) (*ethereum.SyncProgress, error)
 }
 
@@ -130,10 +138,9 @@ type Service struct {
 	httpLogger              bind.ContractFilterer
 	eth1DataFetcher         RPCDataFetcher
 	rpcClient               RPCClient
-	blockCache              *blockCache // cache to store block hash/block height.
+	headerCache             *headerCache // cache to store block hash/block height.
 	latestEth1Data          *protodb.LatestETH1Data
 	depositContractCaller   *contracts.DepositContractCaller
-	depositRoot             []byte
 	depositTrie             *trieutil.SparseMerkleTrie
 	chainStartData          *protodb.ChainStartData
 	beaconDB                db.HeadAccessDatabase // Circular dep if using HeadFetcher.
@@ -141,15 +148,19 @@ type Service struct {
 	lastReceivedMerkleIndex int64 // Keeps track of the last received index to prevent log spam.
 	runError                error
 	preGenesisState         *stateTrie.BeaconState
+	stateGen                *stategen.State
+	eth1HeaderReqLimit      uint64
 }
 
 // Web3ServiceConfig defines a config struct for web3 service to use through its life cycle.
 type Web3ServiceConfig struct {
-	HTTPEndPoint    string
-	DepositContract common.Address
-	BeaconDB        db.HeadAccessDatabase
-	DepositCache    *depositcache.DepositCache
-	StateNotifier   statefeed.Notifier
+	HTTPEndPoint       string
+	DepositContract    common.Address
+	BeaconDB           db.HeadAccessDatabase
+	DepositCache       *depositcache.DepositCache
+	StateNotifier      statefeed.Notifier
+	StateGen           *stategen.State
+	Eth1HeaderReqLimit uint64
 }
 
 // NewService sets up a new instance with an ethclient when
@@ -157,7 +168,7 @@ type Web3ServiceConfig struct {
 func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	_ = cancel // govet fix for lost cancel. Cancel is handled in service.Stop()
-	depositTrie, err := trieutil.NewTrie(int(params.BeaconConfig().DepositContractTreeDepth))
+	depositTrie, err := trieutil.NewTrie(params.BeaconConfig().DepositContractTreeDepth)
 	if err != nil {
 		cancel()
 		return nil, errors.Wrap(err, "could not setup deposit trie")
@@ -165,6 +176,11 @@ func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error
 	genState, err := state.EmptyGenesisState()
 	if err != nil {
 		return nil, errors.Wrap(err, "could not setup genesis state")
+	}
+
+	eth1HeaderReqLimit := config.Eth1HeaderReqLimit
+	if eth1HeaderReqLimit == 0 {
+		eth1HeaderReqLimit = defaultEth1HeaderReqLimit
 	}
 
 	s := &Service{
@@ -178,7 +194,7 @@ func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error
 			BlockHash:          []byte{},
 			LastRequestedBlock: 0,
 		},
-		blockCache:             newBlockCache(),
+		headerCache:            newHeaderCache(),
 		depositContractAddress: config.DepositContract,
 		stateNotifier:          config.StateNotifier,
 		depositTrie:            depositTrie,
@@ -191,6 +207,8 @@ func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error
 		lastReceivedMerkleIndex: -1,
 		preGenesisState:         genState,
 		headTicker:              time.NewTicker(time.Duration(params.BeaconConfig().SecondsPerETH1Block) * time.Second),
+		stateGen:                config.StateGen,
+		eth1HeaderReqLimit:      eth1HeaderReqLimit,
 	}
 
 	eth1Data, err := config.BeaconDB.PowchainData(ctx)
@@ -217,6 +235,24 @@ func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error
 
 // Start a web3 service's main event loop.
 func (s *Service) Start() {
+	// If the chain has not started already and we don't have access to eth1 nodes, we will not be
+	// able to generate the genesis state.
+	if !s.chainStartData.Chainstarted && s.httpEndpoint == "" {
+		// check for genesis state before shutting down the node,
+		// if a genesis state exists, we can continue on.
+		genState, err := s.beaconDB.GenesisState(s.ctx)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if genState == nil {
+			log.Fatal("cannot create genesis state: no eth1 http endpoint defined")
+		}
+	}
+
+	// Exit early if eth1 endpoint is not set.
+	if s.httpEndpoint == "" {
+		return
+	}
 	go func() {
 		s.waitForConnection()
 		s.run(s.ctx.Done())
@@ -307,7 +343,7 @@ func (s *Service) AreAllDepositsProcessed() (bool, error) {
 		return false, errors.Wrap(err, "could not get deposit count")
 	}
 	count := bytesutil.FromBytes8(countByte)
-	deposits := s.depositCache.AllDeposits(context.TODO(), nil)
+	deposits := s.depositCache.AllDeposits(s.ctx, nil)
 	if count != uint64(len(deposits)) {
 		return false, nil
 	}
@@ -320,22 +356,6 @@ func (s *Service) followBlockHeight(ctx context.Context) (uint64, error) {
 	latestValidBlock := uint64(0)
 	if s.latestEth1Data.BlockHeight > params.BeaconConfig().Eth1FollowDistance {
 		latestValidBlock = s.latestEth1Data.BlockHeight - params.BeaconConfig().Eth1FollowDistance
-	}
-	blockTime, err := s.BlockTimeByHeight(ctx, big.NewInt(int64(latestValidBlock)))
-	if err != nil {
-		return 0, err
-	}
-	followTime := func(t uint64) uint64 {
-		return t + params.BeaconConfig().Eth1FollowDistance*params.BeaconConfig().SecondsPerETH1Block
-	}
-	for followTime(blockTime) > s.latestEth1Data.BlockTime && latestValidBlock > 0 {
-		// reduce block height to get eth1 block which
-		// fulfills stated condition
-		latestValidBlock--
-		blockTime, err = s.BlockTimeByHeight(ctx, big.NewInt(int64(latestValidBlock)))
-		if err != nil {
-			return 0, err
-		}
 	}
 	return latestValidBlock, nil
 }
@@ -351,6 +371,10 @@ func (s *Service) connectToPowChain() error {
 		return errors.Wrap(err, "could not create deposit contract caller")
 	}
 
+	if httpClient == nil || rpcClient == nil || depositContractCaller == nil {
+		return errors.New("eth1 client is nil")
+	}
+
 	s.initializeConnection(httpClient, rpcClient, depositContractCaller)
 	return nil
 }
@@ -361,20 +385,38 @@ func (s *Service) dialETH1Nodes() (*ethclient.Client, *gethRPC.Client, error) {
 		return nil, nil, err
 	}
 	httpClient := ethclient.NewClient(httpRPCClient)
-
+	// Add a method to clean-up and close clients in the event
+	// of any connection failure.
+	closeClients := func() {
+		httpRPCClient.Close()
+		httpClient.Close()
+	}
+	syncProg, err := httpClient.SyncProgress(s.ctx)
+	if err != nil {
+		closeClients()
+		return nil, nil, err
+	}
+	if syncProg != nil {
+		closeClients()
+		return nil, nil, errors.New("eth1 node has not finished syncing yet")
+	}
 	// Make a simple call to ensure we are actually connected to a working node.
 	cID, err := httpClient.ChainID(s.ctx)
 	if err != nil {
+		closeClients()
 		return nil, nil, err
 	}
 	nID, err := httpClient.NetworkID(s.ctx)
 	if err != nil {
+		closeClients()
 		return nil, nil, err
 	}
 	if cID.Uint64() != params.BeaconNetworkConfig().ChainID {
+		closeClients()
 		return nil, nil, fmt.Errorf("eth1 node using incorrect chain id, %d != %d", cID.Uint64(), params.BeaconNetworkConfig().ChainID)
 	}
 	if nID.Uint64() != params.BeaconNetworkConfig().NetworkID {
+		closeClients()
 		return nil, nil, fmt.Errorf("eth1 node using incorrect network id, %d != %d", nID.Uint64(), params.BeaconNetworkConfig().NetworkID)
 	}
 
@@ -411,18 +453,29 @@ func (s *Service) waitForConnection() {
 	if errConnect != nil {
 		log.WithError(errConnect).Error("Could not connect to powchain endpoint")
 	}
+	// Use a custom logger to only log errors
+	// once in  a while.
+	logCounter := 0
+	errorLogger := func(err error, msg string) {
+		if logCounter > logThreshold {
+			log.WithError(err).Error(msg)
+			logCounter = 0
+		}
+		logCounter++
+	}
 	ticker := time.NewTicker(backOffPeriod)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			errConnect := s.connectToPowChain()
 			if errConnect != nil {
-				log.WithError(errConnect).Error("Could not connect to powchain endpoint")
+				errorLogger(errConnect, "Could not connect to powchain endpoint")
 				continue
 			}
 			synced, errSynced := s.isEth1NodeSynced()
 			if errSynced != nil {
-				log.WithError(errSynced).Error("Could not check sync status of eth1 chain")
+				errorLogger(errSynced, "Could not check sync status of eth1 chain")
 				continue
 			}
 			if synced {
@@ -430,12 +483,10 @@ func (s *Service) waitForConnection() {
 				log.WithFields(logrus.Fields{
 					"endpoint": s.httpEndpoint,
 				}).Info("Connected to eth1 proof-of-work chain")
-				ticker.Stop()
 				return
 			}
 			log.Debug("Eth1 node is currently syncing")
 		case <-s.ctx.Done():
-			ticker.Stop()
 			log.Debug("Received cancelled context,closing existing powchain service")
 			return
 		}
@@ -464,35 +515,41 @@ func (s *Service) retryETH1Node(err error) {
 	s.runError = nil
 }
 
-// initDataFromContract calls the deposit contract and finds the deposit count
-// and deposit root.
-func (s *Service) initDataFromContract() error {
-	root, err := s.depositContractCaller.GetDepositRoot(&bind.CallOpts{})
-	if err != nil {
-		return errors.Wrap(err, "could not retrieve deposit root")
-	}
-	s.depositRoot = root[:]
-	return nil
-}
-
 func (s *Service) initDepositCaches(ctx context.Context, ctrs []*protodb.DepositContainer) error {
-	if ctrs == nil || len(ctrs) == 0 {
+	if len(ctrs) == 0 {
 		return nil
 	}
 	s.depositCache.InsertDepositContainers(ctx, ctrs)
-	currentState, err := s.beaconDB.HeadState(ctx)
-	if err != nil {
-		return errors.Wrap(err, "could not get head state")
-	}
-	// do not add to pending cache
-	// if no state exists.
-	if currentState == nil {
+	if !s.chainStartData.Chainstarted {
+		// do not add to pending cache
+		// if no genesis state exists.
 		validDepositsCount.Add(float64(s.preGenesisState.Eth1DepositIndex() + 1))
 		return nil
 	}
-	currIndex := currentState.Eth1DepositIndex()
+	genesisState, err := s.beaconDB.GenesisState(ctx)
+	if err != nil {
+		return err
+	}
+	// Default to all deposits post-genesis deposits in
+	// the event we cannot find a finalized state.
+	currIndex := genesisState.Eth1DepositIndex()
+	chkPt, err := s.beaconDB.FinalizedCheckpoint(ctx)
+	if err != nil {
+		return err
+	}
+	rt := bytesutil.ToBytes32(chkPt.Root)
+	if rt != [32]byte{} {
+		fState, err := s.stateGen.StateByRoot(ctx, rt)
+		if err != nil {
+			return errors.Wrap(err, "could not get finalized state")
+		}
+		if fState == nil {
+			return errors.Errorf("finalized state with root %#x does not exist in the db", rt)
+		}
+		// Set deposit index to the one in the current archived state.
+		currIndex = fState.Eth1DepositIndex()
+	}
 	validDepositsCount.Add(float64(currIndex + 1))
-
 	// Only add pending deposits if the container slice length
 	// is more than the current index in state.
 	if uint64(len(ctrs)) > currIndex {
@@ -515,16 +572,11 @@ func (s *Service) processBlockHeader(header *gethTypes.Header) {
 		"blockNumber": s.latestEth1Data.BlockHeight,
 		"blockHash":   hexutil.Encode(s.latestEth1Data.BlockHash),
 	}).Debug("Latest eth1 chain event")
-
-	if err := s.blockCache.AddBlock(gethTypes.NewBlockWithHeader(header)); err != nil {
-		s.runError = err
-		log.Errorf("Unable to add block data to cache %v", err)
-	}
 }
 
 // batchRequestHeaders requests the block range specified in the arguments. Instead of requesting
 // each block in one call, it batches all requests into a single rpc call.
-func (s *Service) batchRequestHeaders(startBlock uint64, endBlock uint64) ([]*gethTypes.Header, error) {
+func (s *Service) batchRequestHeaders(startBlock, endBlock uint64) ([]*gethTypes.Header, error) {
 	requestRange := (endBlock - startBlock) + 1
 	elems := make([]gethRPC.BatchElem, 0, requestRange)
 	headers := make([]*gethTypes.Header, 0, requestRange)
@@ -537,7 +589,7 @@ func (s *Service) batchRequestHeaders(startBlock uint64, endBlock uint64) ([]*ge
 		err := error(nil)
 		elems = append(elems, gethRPC.BatchElem{
 			Method: "eth_getBlockByNumber",
-			Args:   []interface{}{hexutil.EncodeBig(big.NewInt(int64(i))), true},
+			Args:   []interface{}{hexutil.EncodeBig(big.NewInt(int64(i))), false},
 			Result: header,
 			Error:  err,
 		})
@@ -555,7 +607,7 @@ func (s *Service) batchRequestHeaders(startBlock uint64, endBlock uint64) ([]*ge
 	}
 	for _, h := range headers {
 		if h != nil {
-			if err := s.blockCache.AddBlock(gethTypes.NewBlockWithHeader(h)); err != nil {
+			if err := s.headerCache.AddHeader(h); err != nil {
 				return nil, err
 			}
 		}
@@ -577,16 +629,17 @@ func safelyHandlePanic() {
 
 func (s *Service) handleETH1FollowDistance() {
 	defer safelyHandlePanic()
+	ctx := s.ctx
 
 	// use a 5 minutes timeout for block time, because the max mining time is 278 sec (block 7208027)
 	// (analyzed the time of the block from 2018-09-01 to 2019-02-13)
-	fiveMinutesTimeout := roughtime.Now().Add(-5 * time.Minute)
+	fiveMinutesTimeout := timeutils.Now().Add(-5 * time.Minute)
 	// check that web3 client is syncing
 	if time.Unix(int64(s.latestEth1Data.BlockTime), 0).Before(fiveMinutesTimeout) {
 		log.Warn("eth1 client is not syncing")
 	}
 	if !s.chainStartData.Chainstarted {
-		if err := s.checkBlockNumberForChainStart(context.Background(), big.NewInt(int64(s.latestEth1Data.LastRequestedBlock))); err != nil {
+		if err := s.checkBlockNumberForChainStart(ctx, big.NewInt(int64(s.latestEth1Data.LastRequestedBlock))); err != nil {
 			s.runError = err
 			log.Error(err)
 			return
@@ -594,11 +647,14 @@ func (s *Service) handleETH1FollowDistance() {
 	}
 	// If the last requested block has not changed,
 	// we do not request batched logs as this means there are no new
-	// logs for the powchain service to process.
+	// logs for the powchain service to process. Also is a potential
+	// failure condition as would mean we have not respected the protocol
+	// threshold.
 	if s.latestEth1Data.LastRequestedBlock == s.latestEth1Data.BlockHeight {
+		log.Error("Beacon node is not respecting the follow distance")
 		return
 	}
-	if err := s.requestBatchedLogs(context.Background()); err != nil {
+	if err := s.requestBatchedHeadersAndLogs(ctx); err != nil {
 		s.runError = err
 		log.Error(err)
 		return
@@ -617,14 +673,9 @@ func (s *Service) initPOWService() {
 		case <-s.ctx.Done():
 			return
 		default:
-			err := s.initDataFromContract()
-			if err != nil {
-				log.Errorf("Unable to retrieve data from deposit contract %v", err)
-				s.retryETH1Node(err)
-				continue
-			}
+			ctx := s.ctx
 
-			header, err := s.eth1DataFetcher.HeaderByNumber(context.Background(), nil)
+			header, err := s.eth1DataFetcher.HeaderByNumber(ctx, nil)
 			if err != nil {
 				log.Errorf("Unable to retrieve latest ETH1.0 chain header: %v", err)
 				s.retryETH1Node(err)
@@ -635,8 +686,14 @@ func (s *Service) initPOWService() {
 			s.latestEth1Data.BlockHash = header.Hash().Bytes()
 			s.latestEth1Data.BlockTime = header.Time
 
-			if err := s.processPastLogs(context.Background()); err != nil {
+			if err := s.processPastLogs(ctx); err != nil {
 				log.Errorf("Unable to process past logs %v", err)
+				s.retryETH1Node(err)
+				continue
+			}
+			// Cache eth1 headers from our voting period.
+			if err := s.cacheHeadersForEth1DataVote(ctx); err != nil {
+				log.Errorf("Unable to process past headers %v", err)
 				s.retryETH1Node(err)
 				continue
 			}
@@ -651,6 +708,9 @@ func (s *Service) run(done <-chan struct{}) {
 	s.runError = nil
 
 	s.initPOWService()
+
+	chainstartTicker := time.NewTicker(logPeriod)
+	defer chainstartTicker.Stop()
 
 	for {
 		select {
@@ -669,6 +729,88 @@ func (s *Service) run(done <-chan struct{}) {
 			}
 			s.processBlockHeader(head)
 			s.handleETH1FollowDistance()
+		case <-chainstartTicker.C:
+			if s.chainStartData.Chainstarted {
+				chainstartTicker.Stop()
+				continue
+			}
+			s.logTillChainStart()
 		}
 	}
+}
+
+// logs the current thresholds required to hit chainstart every minute.
+func (s *Service) logTillChainStart() {
+	if s.chainStartData.Chainstarted {
+		return
+	}
+	_, blockTime, err := s.retrieveBlockHashAndTime(s.ctx, big.NewInt(int64(s.latestEth1Data.LastRequestedBlock)))
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	valCount, genesisTime := s.currentCountAndTime(blockTime)
+	valNeeded := uint64(0)
+	if valCount < params.BeaconConfig().MinGenesisActiveValidatorCount {
+		valNeeded = params.BeaconConfig().MinGenesisActiveValidatorCount - valCount
+	}
+	secondsLeft := uint64(0)
+	if genesisTime < params.BeaconConfig().MinGenesisTime {
+		secondsLeft = params.BeaconConfig().MinGenesisTime - genesisTime
+	}
+
+	fields := logrus.Fields{
+		"Additional validators needed": valNeeded,
+	}
+	if secondsLeft > 0 {
+		fields["Generating genesis state in"] = time.Duration(secondsLeft) * time.Second
+	}
+
+	log.WithFields(fields).Info("Currently waiting for chainstart")
+}
+
+// cacheHeadersForEth1DataVote makes sure that voting for eth1data after startup utilizes cached headers
+// instead of making multiple RPC requests to the ETH1 endpoint.
+func (s *Service) cacheHeadersForEth1DataVote(ctx context.Context) error {
+	// Find the end block to request from.
+	end, err := s.followBlockHeight(ctx)
+	if err != nil {
+		return err
+	}
+	start, err := s.determineEarliestVotingBlock(ctx, end)
+	if err != nil {
+		return err
+	}
+	// We call batchRequestHeaders for its header caching side-effect, so we don't need the return value.
+	_, err = s.batchRequestHeaders(start, end)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// determines the earliest voting block from which to start caching all our previous headers from.
+func (s *Service) determineEarliestVotingBlock(ctx context.Context, followBlock uint64) (uint64, error) {
+	genesisTime := s.chainStartData.GenesisTime
+	currSlot := helpers.CurrentSlot(genesisTime)
+
+	// In the event genesis has not occurred yet, we just request go back follow_distance blocks.
+	if genesisTime == 0 || currSlot == 0 {
+		earliestBlk := uint64(0)
+		if followBlock > params.BeaconConfig().Eth1FollowDistance {
+			earliestBlk = followBlock - params.BeaconConfig().Eth1FollowDistance
+		}
+		return earliestBlk, nil
+	}
+	votingTime := helpers.VotingPeriodStartTime(genesisTime, currSlot)
+	followBackDist := 2 * params.BeaconConfig().SecondsPerETH1Block * params.BeaconConfig().Eth1FollowDistance
+	if followBackDist > votingTime {
+		return 0, errors.Errorf("invalid genesis time provided. %d > %d", followBackDist, votingTime)
+	}
+	earliestValidTime := votingTime - followBackDist
+	blkNum, err := s.BlockNumberByTimestamp(ctx, earliestValidTime)
+	if err != nil {
+		return 0, err
+	}
+	return blkNum.Uint64(), nil
 }

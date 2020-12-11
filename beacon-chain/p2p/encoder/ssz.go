@@ -3,17 +3,17 @@ package encoder
 import (
 	"fmt"
 	"io"
+	"math"
 	"sync"
 
 	fastssz "github.com/ferranbt/fastssz"
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/snappy"
 	"github.com/pkg/errors"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
-var _ = NetworkEncoding(&SszNetworkEncoder{})
+var _ NetworkEncoding = (*SszNetworkEncoder)(nil)
 
 // MaxGossipSize allowed for gossip messages.
 var MaxGossipSize = params.BeaconNetworkConfig().GossipMaxSize // 1 Mib
@@ -30,11 +30,14 @@ var bufReaderPool = new(sync.Pool)
 // with snappy compression (if enabled).
 type SszNetworkEncoder struct{}
 
+// ProtocolSuffixSSZSnappy is the last part of the topic string to identify the encoding protocol.
+const ProtocolSuffixSSZSnappy = "ssz_snappy"
+
 func (e SszNetworkEncoder) doEncode(msg interface{}) ([]byte, error) {
 	if v, ok := msg.(fastssz.Marshaler); ok {
 		return v.MarshalSSZ()
 	}
-	return ssz.Marshal(msg)
+	return nil, errors.Errorf("non-supported type: %T", msg)
 }
 
 // EncodeGossip the proto gossip message to the io.Writer.
@@ -82,12 +85,15 @@ func (e SszNetworkEncoder) doDecode(b []byte, to interface{}) error {
 	if v, ok := to.(fastssz.Unmarshaler); ok {
 		return v.UnmarshalSSZ(b)
 	}
-	return ssz.Unmarshal(b, to)
+	return errors.Errorf("non-supported type: %T", to)
 }
 
 // DecodeGossip decodes the bytes to the protobuf gossip message provided.
 func (e SszNetworkEncoder) DecodeGossip(b []byte, to interface{}) error {
 	size, err := snappy.DecodedLen(b)
+	if err != nil {
+		return err
+	}
 	if uint64(size) > MaxGossipSize {
 		return errors.Errorf("gossip message exceeds max gossip size: %d bytes > %d bytes", size, MaxGossipSize)
 	}
@@ -112,25 +118,42 @@ func (e SszNetworkEncoder) DecodeWithMaxLength(r io.Reader, to interface{}) erro
 			params.BeaconNetworkConfig().MaxChunkSize,
 		)
 	}
-	r = newBufferedReader(r)
-	defer bufReaderPool.Put(r)
-	b := make([]byte, e.MaxLength(int(msgLen)))
-	numOfBytes, err := r.Read(b)
+	msgMax, err := e.MaxLength(msgLen)
 	if err != nil {
 		return err
 	}
-	return e.doDecode(b[:numOfBytes], to)
+	limitedRdr := io.LimitReader(r, int64(msgMax))
+	r = newBufferedReader(limitedRdr)
+	defer bufReaderPool.Put(r)
+
+	buf := make([]byte, msgLen)
+	// Returns an error if less than msgLen bytes
+	// are read. This ensures we read exactly the
+	// required amount.
+	_, err = io.ReadFull(r, buf)
+	if err != nil {
+		return err
+	}
+	return e.doDecode(buf, to)
 }
 
 // ProtocolSuffix returns the appropriate suffix for protocol IDs.
 func (e SszNetworkEncoder) ProtocolSuffix() string {
-	return "/ssz_snappy"
+	return "/" + ProtocolSuffixSSZSnappy
 }
 
 // MaxLength specifies the maximum possible length of an encoded
 // chunk of data.
-func (e SszNetworkEncoder) MaxLength(length int) int {
-	return snappy.MaxEncodedLen(length)
+func (e SszNetworkEncoder) MaxLength(length uint64) (int, error) {
+	// Defensive check to prevent potential issues when casting to int64.
+	if length > math.MaxInt64 {
+		return 0, errors.Errorf("invalid length provided: %d", length)
+	}
+	maxLen := snappy.MaxEncodedLen(int(length))
+	if maxLen < 0 {
+		return 0, errors.Errorf("max encoded length is negative: %d", maxLen)
+	}
+	return maxLen, nil
 }
 
 // Writes a bytes value through a snappy buffered writer.

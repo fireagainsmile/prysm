@@ -13,14 +13,14 @@ import (
 	"path"
 	"time"
 
-	"github.com/btcsuite/btcd/btcec"
+	gcrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/pkg/errors"
 	"github.com/prysmaticlabs/go-bitfield"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/fileutil"
 	"github.com/prysmaticlabs/prysm/shared/iputils"
-	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/sirupsen/logrus"
 )
 
@@ -40,17 +40,18 @@ func SerializeENR(record *enr.Record) (string, error) {
 }
 
 func convertFromInterfacePrivKey(privkey crypto.PrivKey) *ecdsa.PrivateKey {
-	typeAssertedKey := (*ecdsa.PrivateKey)((*btcec.PrivateKey)(privkey.(*crypto.Secp256k1PrivateKey)))
+	typeAssertedKey := (*ecdsa.PrivateKey)(privkey.(*crypto.Secp256k1PrivateKey))
+	typeAssertedKey.Curve = gcrypto.S256() // Temporary hack, so libp2p Secp256k1 is recognized as geth Secp256k1 in disc v5.1.
 	return typeAssertedKey
 }
 
 func convertToInterfacePrivkey(privkey *ecdsa.PrivateKey) crypto.PrivKey {
-	typeAssertedKey := crypto.PrivKey((*crypto.Secp256k1PrivateKey)((*btcec.PrivateKey)(privkey)))
+	typeAssertedKey := crypto.PrivKey((*crypto.Secp256k1PrivateKey)(privkey))
 	return typeAssertedKey
 }
 
 func convertToInterfacePubkey(pubkey *ecdsa.PublicKey) crypto.PubKey {
-	typeAssertedKey := crypto.PubKey((*crypto.Secp256k1PublicKey)((*btcec.PublicKey)(pubkey)))
+	typeAssertedKey := crypto.PubKey((*crypto.Secp256k1PublicKey)(pubkey))
 	return typeAssertedKey
 }
 
@@ -77,7 +78,7 @@ func privKey(cfg *Config) (*ecdsa.PrivateKey, error) {
 		}
 		dst := make([]byte, hex.EncodedLen(len(rawbytes)))
 		hex.Encode(dst, rawbytes)
-		if err = ioutil.WriteFile(defaultKeyPath, dst, params.BeaconIoConfig().ReadWritePermissions); err != nil {
+		if err = fileutil.WriteFile(defaultKeyPath, dst); err != nil {
 			return nil, err
 		}
 		convertedKey := convertFromInterfacePrivKey(priv)
@@ -128,7 +129,7 @@ func metaDataFromConfig(cfg *Config) (*pbp2p.MetaData, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err = ioutil.WriteFile(defaultKeyPath, dst, params.BeaconIoConfig().ReadWritePermissions); err != nil {
+		if err = fileutil.WriteFile(defaultKeyPath, dst); err != nil {
 			return nil, err
 		}
 		return metaData, nil
@@ -150,7 +151,7 @@ func metaDataFromConfig(cfg *Config) (*pbp2p.MetaData, error) {
 
 // Retrieves an external ipv4 address and converts into a libp2p formatted value.
 func ipAddr() net.IP {
-	ip, err := iputils.ExternalIPv4()
+	ip, err := iputils.ExternalIP()
 	if err != nil {
 		log.Fatalf("Could not get IPv4 address: %v", err)
 	}
@@ -160,7 +161,7 @@ func ipAddr() net.IP {
 // Attempt to dial an address to verify its connectivity
 func verifyConnectivity(addr string, port uint, protocol string) {
 	if addr != "" {
-		a := fmt.Sprintf("%s:%d", addr, port)
+		a := net.JoinHostPort(addr, fmt.Sprintf("%d", port))
 		fields := logrus.Fields{
 			"protocol": protocol,
 			"address":  a,

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
-	"github.com/prysmaticlabs/prysm/shared/testutil"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	logTest "github.com/sirupsen/logrus/hooks/test"
@@ -20,36 +19,25 @@ func cancelledContext() context.Context {
 }
 
 func TestCancelledContext_CleansUpValidator(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	run(cancelledContext(), v)
 	assert.Equal(t, true, v.DoneCalled, "Expected Done() to be called")
 }
 
 func TestCancelledContext_WaitsForChainStart(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	run(cancelledContext(), v)
 	assert.Equal(t, true, v.WaitForChainStartCalled, "Expected WaitForChainStart() to be called")
 }
 
-func TestCancelledContext_WaitsForSynced(t *testing.T) {
-	cfg := &featureconfig.Flags{
-		WaitForSynced: true,
-	}
-	reset := featureconfig.InitWithReset(cfg)
-	defer reset()
-	v := &fakeValidator{}
-	run(cancelledContext(), v)
-	assert.Equal(t, true, v.WaitForSyncedCalled, "Expected WaitForSynced() to be called")
-}
-
 func TestCancelledContext_WaitsForActivation(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	run(cancelledContext(), v)
 	assert.Equal(t, true, v.WaitForActivationCalled, "Expected WaitForActivation() to be called")
 }
 
 func TestCancelledContext_ChecksSlasherReady(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	cfg := &featureconfig.Flags{
 		SlasherProtection: true,
 	}
@@ -60,7 +48,7 @@ func TestCancelledContext_ChecksSlasherReady(t *testing.T) {
 }
 
 func TestUpdateDuties_NextSlot(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slot := uint64(55)
@@ -80,7 +68,7 @@ func TestUpdateDuties_NextSlot(t *testing.T) {
 
 func TestUpdateDuties_HandlesError(t *testing.T) {
 	hook := logTest.NewGlobal()
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slot := uint64(55)
@@ -95,11 +83,11 @@ func TestUpdateDuties_HandlesError(t *testing.T) {
 
 	run(ctx, v)
 
-	testutil.AssertLogsContain(t, hook, "Failed to update assignments")
+	require.LogsContain(t, hook, "Failed to update assignments")
 }
 
 func TestRoleAt_NextSlot(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slot := uint64(55)
@@ -118,13 +106,13 @@ func TestRoleAt_NextSlot(t *testing.T) {
 }
 
 func TestAttests_NextSlot(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slot := uint64(55)
 	ticker := make(chan uint64)
 	v.NextSlotRet = ticker
-	v.RolesAtRet = []validatorRole{roleAttester}
+	v.RolesAtRet = []ValidatorRole{roleAttester}
 	go func() {
 		ticker <- slot
 
@@ -138,13 +126,13 @@ func TestAttests_NextSlot(t *testing.T) {
 }
 
 func TestProposes_NextSlot(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slot := uint64(55)
 	ticker := make(chan uint64)
 	v.NextSlotRet = ticker
-	v.RolesAtRet = []validatorRole{roleProposer}
+	v.RolesAtRet = []ValidatorRole{roleProposer}
 	go func() {
 		ticker <- slot
 
@@ -158,13 +146,13 @@ func TestProposes_NextSlot(t *testing.T) {
 }
 
 func TestBothProposesAndAttests_NextSlot(t *testing.T) {
-	v := &fakeValidator{}
+	v := &FakeValidator{}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	slot := uint64(55)
 	ticker := make(chan uint64)
 	v.NextSlotRet = ticker
-	v.RolesAtRet = []validatorRole{roleAttester, roleProposer}
+	v.RolesAtRet = []ValidatorRole{roleAttester, roleProposer}
 	go func() {
 		ticker <- slot
 
@@ -177,4 +165,21 @@ func TestBothProposesAndAttests_NextSlot(t *testing.T) {
 	assert.Equal(t, slot, v.AttestToBlockHeadArg1, "SubmitAttestation was called with wrong arg")
 	require.Equal(t, true, v.ProposeBlockCalled, "ProposeBlock(%d) was not called", slot)
 	assert.Equal(t, slot, v.ProposeBlockArg1, "ProposeBlock was called with wrong arg")
+}
+
+func TestAllValidatorsAreExited_NextSlot(t *testing.T) {
+	v := &FakeValidator{}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), allValidatorsAreExitedCtxKey, true))
+	hook := logTest.NewGlobal()
+
+	slot := uint64(55)
+	ticker := make(chan uint64)
+	v.NextSlotRet = ticker
+	go func() {
+		ticker <- slot
+
+		cancel()
+	}()
+	run(ctx, v)
+	assert.LogsContain(t, hook, "All validators are exited")
 }

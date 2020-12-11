@@ -33,14 +33,16 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/powchain"
 	"github.com/prysmaticlabs/prysm/beacon-chain/rpc"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
-	prysmsync "github.com/prysmaticlabs/prysm/beacon-chain/sync"
+	regularsync "github.com/prysmaticlabs/prysm/beacon-chain/sync"
 	initialsync "github.com/prysmaticlabs/prysm/beacon-chain/sync/initial-sync"
 	"github.com/prysmaticlabs/prysm/shared"
+	"github.com/prysmaticlabs/prysm/shared/backuputil"
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/prereq"
 	"github.com/prysmaticlabs/prysm/shared/prometheus"
 	"github.com/prysmaticlabs/prysm/shared/sliceutil"
 	"github.com/prysmaticlabs/prysm/shared/tracing"
@@ -61,7 +63,6 @@ const testSkipPowFlag = "test-skip-pow"
 type BeaconNode struct {
 	cliCtx            *cli.Context
 	ctx               context.Context
-	cancel            context.CancelFunc
 	services          *shared.ServiceRegistry
 	lock              sync.RWMutex
 	stop              chan struct{} // Channel to wait for termination notifications.
@@ -90,6 +91,9 @@ func NewBeaconNode(cliCtx *cli.Context) (*BeaconNode, error) {
 	); err != nil {
 		return nil, err
 	}
+
+	// Warn if user's platform is not supported
+	prereq.WarnIfNotSupported(cliCtx.Context)
 
 	featureconfig.ConfigureBeaconChain(cliCtx)
 	cmd.ConfigureBeaconChain(cliCtx)
@@ -138,14 +142,22 @@ func NewBeaconNode(cliCtx *cli.Context) (*BeaconNode, error) {
 		networkCfg.ContractDeploymentBlock = uint64(cliCtx.Int(flags.ContractDeploymentBlock.Name))
 		params.OverrideBeaconNetworkConfig(networkCfg)
 	}
+	if cliCtx.IsSet(flags.ChainID.Name) {
+		c := params.BeaconNetworkConfig()
+		c.ChainID = cliCtx.Uint64(flags.ChainID.Name)
+		params.OverrideBeaconNetworkConfig(c)
+	}
+	if cliCtx.IsSet(flags.NetworkID.Name) {
+		c := params.BeaconNetworkConfig()
+		c.NetworkID = cliCtx.Uint64(flags.NetworkID.Name)
+		params.OverrideBeaconNetworkConfig(c)
+	}
 
 	registry := shared.NewServiceRegistry()
 
-	ctx, cancel := context.WithCancel(context.Background())
 	beacon := &BeaconNode{
 		cliCtx:            cliCtx,
-		ctx:               ctx,
-		cancel:            cancel,
+		ctx:               cliCtx.Context,
 		services:          registry,
 		stop:              make(chan struct{}),
 		stateFeed:         new(event.Feed),
@@ -202,7 +214,7 @@ func NewBeaconNode(cliCtx *cli.Context) (*BeaconNode, error) {
 	}
 
 	if !cliCtx.Bool(cmd.DisableMonitoringFlag.Name) {
-		if err := beacon.registerPrometheusService(); err != nil {
+		if err := beacon.registerPrometheusService(cliCtx); err != nil {
 			return nil, err
 		}
 	}
@@ -265,7 +277,6 @@ func (b *BeaconNode) Close() {
 	defer b.lock.Unlock()
 
 	log.Info("Stopping beacon node")
-	b.cancel() // Cancel the beacon node struct's context.
 	b.services.StopAll()
 	if err := b.db.Close(); err != nil {
 		log.Errorf("Failed to close database: %v", err)
@@ -292,7 +303,7 @@ func (b *BeaconNode) startDB(cliCtx *cli.Context) error {
 	}
 	clearDBConfirmed := false
 	if clearDB && !forceClearDB {
-		actionText := "This will delete your beacon chain data base stored in your data directory. " +
+		actionText := "This will delete your beacon chain database stored in your data directory. " +
 			"Your database backups will not be removed - do you want to proceed? (Y/N)"
 		deniedText := "Database will not be deleted. No changes have been made."
 		clearDBConfirmed, err = cmd.ConfirmAction(actionText, deniedText)
@@ -302,18 +313,15 @@ func (b *BeaconNode) startDB(cliCtx *cli.Context) error {
 	}
 	if clearDBConfirmed || forceClearDB {
 		log.Warning("Removing database")
+		if err := d.Close(); err != nil {
+			return errors.Wrap(err, "could not close db prior to clearing")
+		}
 		if err := d.ClearDB(); err != nil {
 			return errors.Wrap(err, "could not clear database")
 		}
 		d, err = db.NewDB(dbPath, b.stateSummaryCache)
 		if err != nil {
 			return errors.Wrap(err, "could not create new database")
-		}
-	} else {
-		// Only check if historical states were deleted and needed to recompute when
-		// user doesn't want to skip.
-		if err := d.HistoricalStatesDeleted(b.ctx); err != nil {
-			return err
 		}
 	}
 
@@ -323,7 +331,7 @@ func (b *BeaconNode) startDB(cliCtx *cli.Context) error {
 
 	b.db = d
 
-	depositCache, err := depositcache.NewDepositCache()
+	depositCache, err := depositcache.New()
 	if err != nil {
 		return errors.Wrap(err, "could not create deposit cache")
 	}
@@ -376,7 +384,7 @@ func (b *BeaconNode) registerP2P(cliCtx *cli.Context) error {
 		}
 	}
 
-	svc, err := p2p.NewService(&p2p.Config{
+	svc, err := p2p.NewService(b.ctx, &p2p.Config{
 		NoDiscovery:       cliCtx.Bool(cmd.NoDiscovery.Name),
 		StaticPeers:       sliceutil.SplitCommaSeparated(cliCtx.StringSlice(cmd.StaticPeers.Name)),
 		BootstrapNodeAddr: bootnodeAddrs,
@@ -431,6 +439,12 @@ func (b *BeaconNode) registerBlockchainService() error {
 		return err
 	}
 
+	wsp := b.cliCtx.String(flags.WeakSubjectivityCheckpt.Name)
+	bRoot, epoch, err := convertWspInput(wsp)
+	if err != nil {
+		return err
+	}
+
 	maxRoutines := b.cliCtx.Int(cmd.MaxGoroutines.Name)
 	blockchainService, err := blockchain.NewService(b.ctx, &blockchain.Config{
 		BeaconDB:          b.db,
@@ -445,6 +459,8 @@ func (b *BeaconNode) registerBlockchainService() error {
 		ForkChoiceStore:   b.forkChoiceStore,
 		OpsService:        opsService,
 		StateGen:          b.stateGen,
+		WspBlockRoot:      bRoot,
+		WspEpoch:          epoch,
 	})
 	if err != nil {
 		return errors.Wrap(err, "could not register blockchain service")
@@ -465,17 +481,19 @@ func (b *BeaconNode) registerPOWChainService() error {
 		log.Fatalf("Invalid deposit contract address given: %s", depAddress)
 	}
 
-	if !b.cliCtx.IsSet(flags.HTTPWeb3ProviderFlag.Name) {
-		log.Error("Using default ETH1 connection provided by Prysmatic Labs. Please consider running your own ETH1 node for better uptime, security, and decentralization of ETH2. Visit https://docs.prylabs.network/docs/prysm-usage/setup-eth1 for more information.")
-		log.Error("The default eth1 connection provided by Prysmatic Labs will no longer be the default in the next release! You will need to specify --http-web3provider. Please configure your node before the next release.")
+	if b.cliCtx.String(flags.HTTPWeb3ProviderFlag.Name) == "" {
+		log.Error("No ETH1 node specified to run with the beacon node. Please consider running your own ETH1 node for better uptime, security, and decentralization of ETH2. Visit https://docs.prylabs.network/docs/prysm-usage/setup-eth1 for more information.")
+		log.Error("You will need to specify --http-web3provider to attach an eth1 node to the prysm node. Without an eth1 node block proposals for your validator will be affected and the beacon node will not be able to initialize the genesis state.")
 	}
 
 	cfg := &powchain.Web3ServiceConfig{
-		HTTPEndPoint:    b.cliCtx.String(flags.HTTPWeb3ProviderFlag.Name),
-		DepositContract: common.HexToAddress(depAddress),
-		BeaconDB:        b.db,
-		DepositCache:    b.depositCache,
-		StateNotifier:   b,
+		HTTPEndPoint:       b.cliCtx.String(flags.HTTPWeb3ProviderFlag.Name),
+		DepositContract:    common.HexToAddress(depAddress),
+		BeaconDB:           b.db,
+		DepositCache:       b.depositCache,
+		StateNotifier:      b,
+		StateGen:           b.stateGen,
+		Eth1HeaderReqLimit: b.cliCtx.Uint64(flags.Eth1HeaderReqLimit.Name),
 	}
 	web3Service, err := powchain.NewService(b.ctx, cfg)
 	if err != nil {
@@ -491,8 +509,13 @@ func (b *BeaconNode) registerPOWChainService() error {
 		}
 	}
 	if len(knownContract) > 0 && !bytes.Equal(cfg.DepositContract.Bytes(), knownContract) {
-		return fmt.Errorf("database contract is %#x but tried to run with %#x", knownContract, cfg.DepositContract.Bytes())
+		return fmt.Errorf("database contract is %#x but tried to run with %#x. This likely means "+
+			"you are trying to run on a different network than what the database contains. You can run once with "+
+			"'--clear-db' to wipe the old database or use an alternative data directory with '--datadir'",
+			knownContract, cfg.DepositContract.Bytes())
 	}
+
+	log.Infof("Deposit contract: %#x", cfg.DepositContract.Bytes())
 	return b.services.RegisterService(web3Service)
 }
 
@@ -512,7 +535,7 @@ func (b *BeaconNode) registerSyncService() error {
 		return err
 	}
 
-	rs := prysmsync.NewRegularSync(&prysmsync.Config{
+	rs := regularsync.NewService(b.ctx, &regularsync.Config{
 		DB:                  b.db,
 		P2P:                 b.fetchP2P(),
 		Chain:               chainService,
@@ -536,7 +559,7 @@ func (b *BeaconNode) registerInitialSyncService() error {
 		return err
 	}
 
-	is := initialsync.NewInitialSync(&initialsync.Config{
+	is := initialsync.NewService(b.ctx, &initialsync.Config{
 		DB:            b.db,
 		Chain:         chainService,
 		P2P:           b.fetchP2P(),
@@ -580,22 +603,26 @@ func (b *BeaconNode) registerRPCService() error {
 
 	host := b.cliCtx.String(flags.RPCHost.Name)
 	port := b.cliCtx.String(flags.RPCPort.Name)
+	beaconMonitoringHost := b.cliCtx.String(cmd.MonitoringHostFlag.Name)
+	beaconMonitoringPort := b.cliCtx.Int(flags.MonitoringPortFlag.Name)
 	cert := b.cliCtx.String(flags.CertFlag.Name)
 	key := b.cliCtx.String(flags.KeyFlag.Name)
-	slasherCert := b.cliCtx.String(flags.SlasherCertFlag.Name)
-	slasherProvider := b.cliCtx.String(flags.SlasherProviderFlag.Name)
 	mockEth1DataVotes := b.cliCtx.Bool(flags.InteropMockEth1DataVotesFlag.Name)
 	enableDebugRPCEndpoints := b.cliCtx.Bool(flags.EnableDebugRPCEndpoints.Name)
+	maxMsgSize := b.cliCtx.Int(cmd.GrpcMaxCallRecvMsgSizeFlag.Name)
 	p2pService := b.fetchP2P()
 	rpcService := rpc.NewService(b.ctx, &rpc.Config{
 		Host:                    host,
 		Port:                    port,
+		BeaconMonitoringHost:    beaconMonitoringHost,
+		BeaconMonitoringPort:    beaconMonitoringPort,
 		CertFlag:                cert,
 		KeyFlag:                 key,
 		BeaconDB:                b.db,
 		Broadcaster:             p2pService,
 		PeersFetcher:            p2pService,
 		PeerManager:             p2pService,
+		ChainInfoFetcher:        chainService,
 		HeadFetcher:             chainService,
 		ForkFetcher:             chainService,
 		FinalizationFetcher:     chainService,
@@ -615,16 +642,15 @@ func (b *BeaconNode) registerRPCService() error {
 		BlockNotifier:           b,
 		StateNotifier:           b,
 		OperationNotifier:       b,
-		SlasherCert:             slasherCert,
-		SlasherProvider:         slasherProvider,
 		StateGen:                b.stateGen,
 		EnableDebugRPCEndpoints: enableDebugRPCEndpoints,
+		MaxMsgSize:              maxMsgSize,
 	})
 
 	return b.services.RegisterService(rpcService)
 }
 
-func (b *BeaconNode) registerPrometheusService() error {
+func (b *BeaconNode) registerPrometheusService(cliCtx *cli.Context) error {
 	var additionalHandlers []prometheus.Handler
 	var p *p2p.Service
 	if err := b.services.FetchService(&p); err != nil {
@@ -637,13 +663,19 @@ func (b *BeaconNode) registerPrometheusService() error {
 		panic(err)
 	}
 
-	if featureconfig.Get().EnableBackupWebhook {
-		additionalHandlers = append(additionalHandlers, prometheus.Handler{Path: "/db/backup", Handler: db.BackupHandler(b.db)})
+	if cliCtx.IsSet(cmd.EnableBackupWebhookFlag.Name) {
+		additionalHandlers = append(
+			additionalHandlers,
+			prometheus.Handler{
+				Path:    "/db/backup",
+				Handler: backuputil.BackupHandler(b.db, cliCtx.String(cmd.BackupWebhookOutputDir.Name)),
+			},
+		)
 	}
 
 	additionalHandlers = append(additionalHandlers, prometheus.Handler{Path: "/tree", Handler: c.TreeHandler})
 
-	service := prometheus.NewPrometheusService(
+	service := prometheus.NewService(
 		fmt.Sprintf("%s:%d", b.cliCtx.String(cmd.MonitoringHostFlag.Name), b.cliCtx.Int(flags.MonitoringPortFlag.Name)),
 		b.services,
 		additionalHandlers...,
@@ -683,7 +715,7 @@ func (b *BeaconNode) registerInteropServices() error {
 	genesisStatePath := b.cliCtx.String(flags.InteropGenesisStateFlag.Name)
 
 	if genesisValidators > 0 || genesisStatePath != "" {
-		svc := interopcoldstart.NewColdStartService(b.ctx, &interopcoldstart.Config{
+		svc := interopcoldstart.NewService(b.ctx, &interopcoldstart.Config{
 			GenesisTime:   genesisTime,
 			NumValidators: genesisValidators,
 			BeaconDB:      b.db,

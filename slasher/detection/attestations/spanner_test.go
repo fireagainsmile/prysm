@@ -8,12 +8,14 @@ import (
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/sliceutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	testDB "github.com/prysmaticlabs/prysm/slasher/db/testing"
 	dbTypes "github.com/prysmaticlabs/prysm/slasher/db/types"
 	"github.com/prysmaticlabs/prysm/slasher/detection/attestations/types"
 )
 
-func indexedAttestation(source uint64, target uint64, indices []uint64) *ethpb.IndexedAttestation {
+func indexedAttestation(source, target uint64, indices []uint64) *ethpb.IndexedAttestation {
 	return &ethpb.IndexedAttestation{
 		AttestingIndices: indices,
 		Data: &ethpb.AttestationData{
@@ -35,7 +37,7 @@ func TestSpanDetector_DetectSlashingsForAttestation_Double(t *testing.T) {
 		name        string
 		att         *ethpb.IndexedAttestation
 		incomingAtt *ethpb.IndexedAttestation
-		slashCount  uint64
+		slashCount  int
 	}
 	tests := []testStruct{
 		{
@@ -243,14 +245,10 @@ func TestSpanDetector_DetectSlashingsForAttestation_Double(t *testing.T) {
 				slasherDB: db,
 			}
 
-			if err := sd.UpdateSpans(ctx, tt.att); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, sd.UpdateSpans(ctx, tt.att))
 
 			res, err := sd.DetectSlashingsForAttestation(ctx, tt.incomingAtt)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 
 			var want []*types.DetectionResult
 			if tt.slashCount > 0 {
@@ -263,12 +261,8 @@ func TestSpanDetector_DetectSlashingsForAttestation_Double(t *testing.T) {
 					})
 				}
 			}
-			if !reflect.DeepEqual(res, want) {
-				t.Errorf("Wanted: %v, received %v", want, res)
-			}
-			if uint64(len(res)) != tt.slashCount {
-				t.Fatalf("Unexpected amount of slashings found, received %d, expected %d", len(res), tt.slashCount)
-			}
+			assert.DeepEqual(t, want, res)
+			require.Equal(t, tt.slashCount, len(res), "Unexpected amount of slashings found")
 		})
 	}
 }
@@ -462,6 +456,29 @@ func TestSpanDetector_DetectSlashingsForAttestation_Surround(t *testing.T) {
 				17: {0, 0},
 			},
 		},
+		{
+			name:           "Should slash if max span > distance && source > target",
+			sourceEpoch:    6,
+			targetEpoch:    3,
+			slashableEpoch: 7,
+			shouldSlash:    true,
+			// Given a distance of (6 - 3) = 3, we want the validator at epoch 3 to have
+			// committed a slashable offense by having a max span of 4 > distance.
+			spansByEpochForValidator: map[uint64][3]uint16{
+				3: {0, 4},
+			},
+		},
+		{
+			name:        "Should not slash if max span = distance && source > target",
+			sourceEpoch: 6,
+			targetEpoch: 3,
+			shouldSlash: false,
+			// Given a distance of (6 - 3) = 3, we want the validator at epoch 3 to NOT
+			// have committed slashable offense by having a max span of 1 < distance.
+			spansByEpochForValidator: map[uint64][3]uint16{
+				3: {0, 1},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -475,20 +492,14 @@ func TestSpanDetector_DetectSlashingsForAttestation_Surround(t *testing.T) {
 			validatorIndex := uint64(0)
 			for k, v := range tt.spansByEpochForValidator {
 				epochStore, err := types.NewEpochStore([]byte{})
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 				span := types.Span{
 					MinSpan: v[0],
 					MaxSpan: v[1],
 				}
 				epochStore, err = epochStore.SetValidatorSpan(validatorIndex, span)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := sd.slasherDB.SaveEpochSpans(ctx, k, epochStore, dbTypes.UseDB); err != nil {
-					t.Fatalf("Failed to save to slasherDB: %v", err)
-				}
+				require.NoError(t, err)
+				require.NoError(t, sd.slasherDB.SaveEpochSpans(ctx, k, epochStore, dbTypes.UseDB), "Failed to save to slasherDB")
 			}
 
 			att := &ethpb.IndexedAttestation{
@@ -503,12 +514,8 @@ func TestSpanDetector_DetectSlashingsForAttestation_Surround(t *testing.T) {
 				AttestingIndices: []uint64{0},
 			}
 			res, err := sd.DetectSlashingsForAttestation(ctx, att)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !tt.shouldSlash && res != nil {
-				t.Fatalf("Did not want validator to be slashed but found slashable offense: %v", res)
-			}
+			require.NoError(t, err)
+			require.Equal(t, false, !tt.shouldSlash && res != nil, "Did not want validator to be slashed but found slashable offense: %v", res)
 			if tt.shouldSlash {
 				want := []*types.DetectionResult{
 					{
@@ -516,9 +523,7 @@ func TestSpanDetector_DetectSlashingsForAttestation_Surround(t *testing.T) {
 						SlashableEpoch: tt.slashableEpoch,
 					},
 				}
-				if !reflect.DeepEqual(res, want) {
-					t.Errorf("Wanted: %v, received %v", want, res)
-				}
+				assert.DeepEqual(t, want, res)
 			}
 		})
 	}
@@ -641,34 +646,107 @@ func TestSpanDetector_DetectSlashingsForAttestation_MultipleValidators(t *testin
 				indexedAttestation(1, 5, []uint64{3}),
 			},
 		},
+		{
+			name: "3 of 4 validators slashed, differing surrounds source > target",
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{0, 1, 2, 3},
+				Data: &ethpb.AttestationData{
+					Source: &ethpb.Checkpoint{
+						Epoch: 7,
+						Root:  []byte("good source"),
+					},
+					Target: &ethpb.Checkpoint{
+						Epoch: 5,
+						Root:  []byte("good target"),
+					},
+				},
+				Signature: []byte{1, 2},
+			},
+			slashableEpochs: []uint64{8, 9, 10, 0},
+			// Detections - surround, surround, surround, none.
+			shouldSlash: []bool{true, true, true, false},
+			// Atts in map: (src, epoch) - 0: (1, 8), 1: (3, 9), 2: (2, 10), 3: (4, 6)
+			atts: []*ethpb.IndexedAttestation{
+				indexedAttestation(1, 8, []uint64{0}),
+				indexedAttestation(3, 9, []uint64{1}),
+				indexedAttestation(2, 10, []uint64{2}),
+				indexedAttestation(4, 6, []uint64{3}),
+			},
+		},
+		{
+			name: "3 of 4 validators slashed, differing surrounded source > target",
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{0, 1, 2, 3},
+				Data: &ethpb.AttestationData{
+					Source: &ethpb.Checkpoint{
+						Epoch: 9,
+						Root:  []byte("good source"),
+					},
+					Target: &ethpb.Checkpoint{
+						Epoch: 2,
+						Root:  []byte("good target"),
+					},
+				},
+				Signature: []byte{1, 2},
+			},
+			slashableEpochs: []uint64{8, 8, 7, 0},
+			// Detections - surround, surround, surround, none.
+			shouldSlash: []bool{true, true, true, false},
+			// Atts in map: (src, epoch) - 0: (5, 8), 1: (3, 8), 2: (4, 7), 3: (1, 5)
+			atts: []*ethpb.IndexedAttestation{
+				indexedAttestation(5, 8, []uint64{0}),
+				indexedAttestation(3, 8, []uint64{1}),
+				indexedAttestation(4, 7, []uint64{2}),
+				indexedAttestation(1, 5, []uint64{3}),
+			},
+		},
+		{
+			name: "3 of 4 validators slashed, differing surrounded source > target in update",
+			incomingAtt: &ethpb.IndexedAttestation{
+				AttestingIndices: []uint64{0, 1, 2, 3},
+				Data: &ethpb.AttestationData{
+					Source: &ethpb.Checkpoint{
+						Epoch: 2,
+						Root:  []byte("good source"),
+					},
+					Target: &ethpb.Checkpoint{
+						Epoch: 9,
+						Root:  []byte("good target"),
+					},
+				},
+				Signature: []byte{1, 2},
+			},
+			slashableEpochs: []uint64{8, 8, 7, 0},
+			// Detections - surround, surround, surround, none.
+			shouldSlash: []bool{true, true, true, false},
+			// Atts in map: (src, epoch) - 0: (5, 8), 1: (3, 8), 2: (4, 7), 3: (1, 5)
+			atts: []*ethpb.IndexedAttestation{
+				indexedAttestation(8, 5, []uint64{0}),
+				indexedAttestation(8, 3, []uint64{1}),
+				indexedAttestation(7, 4, []uint64{2}),
+				indexedAttestation(5, 1, []uint64{3}),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := testDB.SetupSlasherDB(t, false)
 			ctx := context.Background()
 			defer func() {
-				if err := db.ClearDB(); err != nil {
-					t.Log(err)
-				}
+				assert.NoError(t, db.ClearDB())
 			}()
 			defer func() {
-				if err := db.Close(); err != nil {
-					t.Log(err)
-				}
+				assert.NoError(t, db.Close())
 			}()
 
 			spanDetector := &SpanDetector{
 				slasherDB: db,
 			}
 			for _, att := range tt.atts {
-				if err := spanDetector.UpdateSpans(ctx, att); err != nil {
-					t.Fatalf("Failed to save to slasherDB: %v", err)
-				}
+				require.NoError(t, spanDetector.UpdateSpans(ctx, att), "Failed to save to slasherDB")
 			}
 			res, err := spanDetector.DetectSlashingsForAttestation(ctx, tt.incomingAtt)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			var want []*types.DetectionResult
 			for i := 0; i < len(tt.incomingAtt.AttestingIndices); i++ {
 				if tt.shouldSlash[i] {
@@ -814,34 +892,22 @@ func TestNewSpanDetector_UpdateSpans(t *testing.T) {
 			db := testDB.SetupSlasherDB(t, false)
 			ctx := context.Background()
 			defer func() {
-				if err := db.ClearDB(); err != nil {
-					t.Log(err)
-				}
+				assert.NoError(t, db.ClearDB())
 			}()
 			defer func() {
-				if err := db.Close(); err != nil {
-					t.Log(err)
-				}
+				assert.NoError(t, db.Close())
 			}()
 
 			sd := &SpanDetector{
 				slasherDB: db,
 			}
-			if err := sd.UpdateSpans(ctx, tt.att); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, sd.UpdateSpans(ctx, tt.att))
 			for epoch := range tt.want {
 				sm, err := sd.slasherDB.EpochSpans(ctx, uint64(epoch), dbTypes.UseDB)
-				if err != nil {
-					t.Fatalf("Failed to read from slasherDB: %v", err)
-				}
+				require.NoError(t, err, "Failed to read from slasherDB")
 				resMap, err := sm.ToMap()
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(resMap, tt.want[epoch]) {
-					t.Errorf("Wanted and received:\n%v \n%v", tt.want[epoch], resMap)
-				}
+				require.NoError(t, err)
+				assert.DeepEqual(t, tt.want[epoch], resMap)
 			}
 		})
 	}
@@ -868,25 +934,15 @@ func TestSpanDetector_UpdateMinSpansCheckCacheSize(t *testing.T) {
 	db := testDB.SetupSlasherDB(t, false)
 	ctx := context.Background()
 	defer func() {
-		if err := db.ClearDB(); err != nil {
-			t.Log(err)
-		}
+		assert.NoError(t, db.ClearDB())
 	}()
 	defer func() {
-		if err := db.Close(); err != nil {
-			t.Log(err)
-		}
+		assert.NoError(t, db.Close())
 	}()
 
 	sd := &SpanDetector{
 		slasherDB: db,
 	}
-	if err := sd.updateMinSpan(ctx, att); err != nil {
-		t.Fatal(err)
-	}
-
-	if len := db.CacheLength(ctx); len != epochLookback {
-		t.Fatalf("Expected cache length to be equal to epochLookback: %d got: %d", epochLookback, len)
-	}
-
+	require.NoError(t, sd.updateMinSpan(ctx, att))
+	require.Equal(t, epochLookback, db.CacheLength(ctx), "Unexpected cache length")
 }

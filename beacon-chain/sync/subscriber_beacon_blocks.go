@@ -8,7 +8,6 @@ import (
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state/interop"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 )
 
 func (s *Service) beaconBlockSubscriber(ctx context.Context, msg proto.Message) error {
@@ -25,20 +24,20 @@ func (s *Service) beaconBlockSubscriber(ctx context.Context, msg proto.Message) 
 
 	block := signed.Block
 
-	root, err := stateutil.BlockRoot(block)
+	root, err := block.HashTreeRoot()
 	if err != nil {
 		return err
 	}
 
 	if err := s.chain.ReceiveBlock(ctx, signed, root); err != nil {
 		interop.WriteBlockToDisk(signed, true /*failed*/)
-		s.setBadBlock(root)
+		s.setBadBlock(ctx, root)
 		return err
 	}
 
 	// Delete attestations from the block in the pool to avoid inclusion in future block.
 	if err := s.deleteAttsInPool(block.Body.Attestations); err != nil {
-		log.Errorf("Could not delete attestations in pool: %v", err)
+		log.Debugf("Could not delete attestations in pool: %v", err)
 		return nil
 	}
 

@@ -6,13 +6,14 @@ import (
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestSortedObj_SortBlocksRoots(t *testing.T) {
 	source := rand.NewSource(33)
 	randGen := rand.New(source)
-	blks := []*ethpb.SignedBeaconBlock{}
-	roots := [][32]byte{}
+	var blks []*ethpb.SignedBeaconBlock
+	var roots [][32]byte
 	randFunc := func() int64 {
 		return randGen.Int63n(50)
 	}
@@ -44,8 +45,8 @@ func TestSortedObj_SortBlocksRoots(t *testing.T) {
 func TestSortedObj_NoDuplicates(t *testing.T) {
 	source := rand.NewSource(33)
 	randGen := rand.New(source)
-	blks := []*ethpb.SignedBeaconBlock{}
-	roots := [][32]byte{}
+	var blks []*ethpb.SignedBeaconBlock
+	var roots [][32]byte
 	randFunc := func() int64 {
 		return randGen.Int63n(50)
 	}
@@ -54,19 +55,17 @@ func TestSortedObj_NoDuplicates(t *testing.T) {
 		slot := uint64(randFunc())
 		newBlk := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: slot}}
 		// append twice
-		blks = append(blks, newBlk)
-		blks = append(blks, newBlk)
+		blks = append(blks, newBlk, newBlk)
 
 		// append twice
 		root := bytesutil.ToBytes32(bytesutil.Bytes32(slot))
-		roots = append(roots, root)
-		roots = append(roots, root)
-
+		roots = append(roots, root, root)
 	}
 
 	r := &Service{}
 
-	newBlks, newRoots := r.dedupBlocksAndRoots(blks, roots)
+	newBlks, newRoots, err := r.dedupBlocksAndRoots(blks, roots)
+	require.NoError(t, err)
 
 	rootMap := make(map[[32]byte]bool)
 	for i, b := range newBlks {

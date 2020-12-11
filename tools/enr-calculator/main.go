@@ -6,13 +6,12 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"flag"
-	"io/ioutil"
 	"net"
 
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/libp2p/go-libp2p-core/crypto"
+	"github.com/prysmaticlabs/prysm/shared/fileutil"
 	_ "github.com/prysmaticlabs/prysm/shared/maxprocs"
 	log "github.com/sirupsen/logrus"
 )
@@ -28,7 +27,7 @@ var (
 func main() {
 	flag.Parse()
 
-	if len(*privateKey) == 0 {
+	if *privateKey == "" {
 		log.Fatal("No private key given")
 	}
 	dst, err := hex.DecodeString(*privateKey)
@@ -39,7 +38,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	ecdsaPrivKey := (*ecdsa.PrivateKey)((*btcec.PrivateKey)(unmarshalledKey.(*crypto.Secp256k1PrivateKey)))
+	ecdsaPrivKey := (*ecdsa.PrivateKey)(unmarshalledKey.(*crypto.Secp256k1PrivateKey))
 
 	if net.ParseIP(*ipAddr).To4() == nil {
 		log.Fatalf("Invalid ipv4 address given: %v\n", err)
@@ -69,7 +68,7 @@ func main() {
 	log.Info(localNode.Node().String())
 
 	if *outfile != "" {
-		err := ioutil.WriteFile(*outfile, []byte(localNode.Node().String()), 0644)
+		err := fileutil.WriteFile(*outfile, []byte(localNode.Node().String()))
 		if err != nil {
 			panic(err)
 		}

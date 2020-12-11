@@ -10,6 +10,7 @@ import (
 	protodb "github.com/prysmaticlabs/prysm/proto/beacon/db"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
+	"github.com/prysmaticlabs/prysm/shared/mathutil"
 )
 
 // SparseMerkleTrie implements a sparse, general purpose Merkle trie to be used
@@ -21,7 +22,7 @@ type SparseMerkleTrie struct {
 }
 
 // NewTrie returns a new merkle trie filled with zerohashes to use.
-func NewTrie(depth int) (*SparseMerkleTrie, error) {
+func NewTrie(depth uint64) (*SparseMerkleTrie, error) {
 	var zeroBytes [32]byte
 	items := [][]byte{zeroBytes[:]}
 	return GenerateTrieFromItems(items, depth)
@@ -42,7 +43,7 @@ func CreateTrieFromProto(trieObj *protodb.SparseMerkleTrie) *SparseMerkleTrie {
 }
 
 // GenerateTrieFromItems constructs a Merkle trie from a sequence of byte slices.
-func GenerateTrieFromItems(items [][]byte, depth int) (*SparseMerkleTrie, error) {
+func GenerateTrieFromItems(items [][]byte, depth uint64) (*SparseMerkleTrie, error) {
 	if len(items) == 0 {
 		return nil, errors.New("no items provided to generate Merkle trie")
 	}
@@ -54,11 +55,11 @@ func GenerateTrieFromItems(items [][]byte, depth int) (*SparseMerkleTrie, error)
 		transformedLeaves[i] = arr[:]
 	}
 	layers[0] = transformedLeaves
-	for i := 0; i < depth; i++ {
+	for i := uint64(0); i < depth; i++ {
 		if len(layers[i])%2 == 1 {
 			layers[i] = append(layers[i], ZeroHashes[i][:])
 		}
-		updatedValues := make([][]byte, 0, 0)
+		updatedValues := make([][]byte, 0)
 		for j := 0; j < len(layers[i]); j += 2 {
 			concat := hashutil.Hash(append(layers[i][j], layers[i][j+1]...))
 			updatedValues = append(updatedValues, concat[:])
@@ -101,7 +102,7 @@ func (m *SparseMerkleTrie) Insert(item []byte, index int) {
 	for i := 0; i < int(m.depth); i++ {
 		isLeft := currentIndex%2 == 0
 		neighborIdx := currentIndex ^ 1
-		neighbor := make([]byte, 32)
+		var neighbor []byte
 		if neighborIdx >= len(m.branches[i]) {
 			neighbor = ZeroHashes[i][:]
 		} else {
@@ -181,17 +182,19 @@ func (m *SparseMerkleTrie) ToProto() *protodb.SparseMerkleTrie {
 }
 
 // VerifyMerkleBranch verifies a Merkle branch against a root of a trie.
-func VerifyMerkleBranch(root []byte, item []byte, merkleIndex int, proof [][]byte) bool {
+func VerifyMerkleBranch(root, item []byte, merkleIndex int, proof [][]byte, depth uint64) bool {
+	if len(proof) != int(depth)+1 {
+		return false
+	}
 	node := bytesutil.ToBytes32(item)
-	currentIndex := merkleIndex
-	for i := 0; i < len(proof); i++ {
-		if currentIndex%2 != 0 {
+	for i := 0; i <= int(depth); i++ {
+		if (uint64(merkleIndex) / mathutil.PowerOf2(uint64(i)) % 2) != 0 {
 			node = hashutil.Hash(append(proof[i], node[:]...))
 		} else {
 			node = hashutil.Hash(append(node[:], proof[i]...))
 		}
-		currentIndex = currentIndex / 2
 	}
+
 	return bytes.Equal(root, node[:])
 }
 

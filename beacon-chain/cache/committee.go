@@ -1,3 +1,5 @@
+// +build !libfuzzer
+
 package cache
 
 import (
@@ -12,14 +14,9 @@ import (
 )
 
 var (
-	// ErrNotCommittee will be returned when a cache object is not a pointer to
-	// a Committee struct.
-	ErrNotCommittee = errors.New("object is not a committee struct")
-
 	// maxCommitteesCacheSize defines the max number of shuffled committees on per randao basis can cache.
-	// Due to reorgs, it's good to keep the old cache around for quickly switch over. 10 is a generous
-	// cache size as it considers 3 concurrent branches over 3 epochs.
-	maxCommitteesCacheSize = uint64(10)
+	// Due to reorgs and long finality, it's good to keep the old cache around for quickly switch over.
+	maxCommitteesCacheSize = uint64(32)
 
 	// CommitteeCacheMiss tracks the number of committee requests that aren't present in the cache.
 	CommitteeCacheMiss = promauto.NewCounter(prometheus.CounterOpts{
@@ -32,15 +29,6 @@ var (
 		Help: "The number of committee requests that are present in the cache.",
 	})
 )
-
-// Committees defines the shuffled committees seed.
-type Committees struct {
-	CommitteeCount  uint64
-	Seed            [32]byte
-	ShuffledIndices []uint64
-	SortedIndices   []uint64
-	ProposerIndices []uint64
-}
 
 // CommitteeCache is a struct with 1 queue for looking up shuffled indices list by seed.
 type CommitteeCache struct {
@@ -116,35 +104,6 @@ func (c *CommitteeCache) AddCommitteeShuffledList(committees *Committees) error 
 	return nil
 }
 
-// AddProposerIndicesList updates the committee shuffled list with proposer indices.
-func (c *CommitteeCache) AddProposerIndicesList(seed [32]byte, indices []uint64) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
-	obj, exists, err := c.CommitteeCache.GetByKey(key(seed))
-	if err != nil {
-		return err
-	}
-	if !exists {
-		committees := &Committees{ProposerIndices: indices}
-		if err := c.CommitteeCache.Add(committees); err != nil {
-			return err
-		}
-	} else {
-		committees, ok := obj.(*Committees)
-		if !ok {
-			return ErrNotCommittee
-		}
-		committees.ProposerIndices = indices
-		if err := c.CommitteeCache.Add(committees); err != nil {
-			return err
-		}
-	}
-
-	trim(c.CommitteeCache, maxCommitteesCacheSize)
-	return nil
-}
-
 // ActiveIndices returns the active indices of a given seed stored in cache.
 func (c *CommitteeCache) ActiveIndices(seed [32]byte) ([]uint64, error) {
 	c.lock.RLock()
@@ -193,28 +152,10 @@ func (c *CommitteeCache) ActiveIndicesCount(seed [32]byte) (int, error) {
 	return len(item.SortedIndices), nil
 }
 
-// ProposerIndices returns the proposer indices of a given seed.
-func (c *CommitteeCache) ProposerIndices(seed [32]byte) ([]uint64, error) {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-	obj, exists, err := c.CommitteeCache.GetByKey(key(seed))
-	if err != nil {
-		return nil, err
-	}
-
-	if exists {
-		CommitteeCacheHit.Inc()
-	} else {
-		CommitteeCacheMiss.Inc()
-		return nil, nil
-	}
-
-	item, ok := obj.(*Committees)
-	if !ok {
-		return nil, ErrNotCommittee
-	}
-
-	return item.ProposerIndices, nil
+// HasEntry returns true if the committee cache has a value.
+func (c *CommitteeCache) HasEntry(seed string) bool {
+	_, ok, err := c.CommitteeCache.GetByKey(seed)
+	return err == nil && ok
 }
 
 func startEndIndices(c *Committees, index uint64) (uint64, uint64) {

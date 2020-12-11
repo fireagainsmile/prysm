@@ -12,19 +12,25 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
+	"github.com/prysmaticlabs/prysm/shared/journald"
 	"github.com/prysmaticlabs/prysm/shared/logutil"
+	"github.com/prysmaticlabs/prysm/shared/tos"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/prysmaticlabs/prysm/slasher/flags"
 	"github.com/prysmaticlabs/prysm/slasher/node"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
-	"github.com/urfave/cli/v2/altsrc"
 	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 )
 
 var log = logrus.WithField("prefix", "main")
 
 func startSlasher(cliCtx *cli.Context) error {
+	// verify if ToS accepted
+	if err := tos.VerifyTosAcceptedOrPrompt(cliCtx); err != nil {
+		return err
+	}
+
 	verbosity := cliCtx.String(cmd.VerbosityFlag.Name)
 	level, err := logrus.ParseLevel(verbosity)
 	if err != nil {
@@ -51,6 +57,9 @@ var appFlags = []cli.Flag{
 	cmd.TraceSampleFractionFlag,
 	cmd.MonitoringHostFlag,
 	flags.MonitoringPortFlag,
+	cmd.DisableMonitoringFlag,
+	cmd.EnableBackupWebhookFlag,
+	cmd.BackupWebhookOutputDir,
 	cmd.LogFileName,
 	cmd.LogFormat,
 	cmd.ClearDB,
@@ -69,6 +78,9 @@ var appFlags = []cli.Flag{
 	flags.BeaconCertFlag,
 	flags.BeaconRPCProviderFlag,
 	flags.EnableHistoricalDetectionFlag,
+	flags.SpanCacheSize,
+	cmd.AcceptTosFlag,
+	flags.HighestAttCacheSize,
 }
 
 func init() {
@@ -83,14 +95,9 @@ func main() {
 	app.Flags = appFlags
 	app.Action = startSlasher
 	app.Before = func(ctx *cli.Context) error {
-		// Load any flags from file, if specified.
-		if ctx.IsSet(cmd.ConfigFileFlag.Name) {
-			if err := altsrc.InitInputSourceWithContext(
-				appFlags,
-				altsrc.NewYamlSourceFromFlagFunc(
-					cmd.ConfigFileFlag.Name))(ctx); err != nil {
-				return err
-			}
+		// Load flags from config file, if specified.
+		if err := cmd.LoadFlagsFromConfig(ctx, app.Flags); err != nil {
+			return err
 		}
 
 		format := ctx.String(cmd.LogFormat.Name)
@@ -103,13 +110,14 @@ func main() {
 			// the colors are ANSI codes and seen as Gibberish in the log files.
 			formatter.DisableColors = ctx.String(cmd.LogFileName.Name) != ""
 			logrus.SetFormatter(formatter)
-			break
 		case "fluentd":
 			logrus.SetFormatter(joonix.NewFormatter())
-			break
 		case "json":
 			logrus.SetFormatter(&logrus.JSONFormatter{})
-			break
+		case "journald":
+			if err := journald.Enable(); err != nil {
+				return err
+			}
 		default:
 			return fmt.Errorf("unknown log format %s", format)
 		}
