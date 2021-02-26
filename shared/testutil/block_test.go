@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	types "github.com/prysmaticlabs/eth2-types"
+	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state/stateutils"
@@ -98,7 +100,7 @@ func TestGenerateFullBlock_ValidAttesterSlashings(t *testing.T) {
 	require.NoError(t, err)
 
 	slashableIndices := block.Block.Body.AttesterSlashings[0].Attestation_1.AttestingIndices
-	if val, err := beaconState.ValidatorAtIndexReadOnly(slashableIndices[0]); err != nil || !val.Slashed() {
+	if val, err := beaconState.ValidatorAtIndexReadOnly(types.ValidatorIndex(slashableIndices[0])); err != nil || !val.Slashed() {
 		require.NoError(t, err)
 		t.Fatal("expected validator to be slashed")
 	}
@@ -152,7 +154,7 @@ func TestGenerateFullBlock_ValidDeposits(t *testing.T) {
 func TestGenerateFullBlock_ValidVoluntaryExits(t *testing.T) {
 	beaconState, privs := DeterministicGenesisState(t, 256)
 	// Moving the state 2048 epochs forward due to PERSISTENT_COMMITTEE_PERIOD.
-	err := beaconState.SetSlot(3 + params.BeaconConfig().ShardCommitteePeriod*params.BeaconConfig().SlotsPerEpoch)
+	err := beaconState.SetSlot(params.BeaconConfig().SlotsPerEpoch.Mul(uint64(params.BeaconConfig().ShardCommitteePeriod)).Add(3))
 	require.NoError(t, err)
 	conf := &BlockGenConfig{
 		NumVoluntaryExits: 1,
@@ -169,4 +171,15 @@ func TestGenerateFullBlock_ValidVoluntaryExits(t *testing.T) {
 	if val.ExitEpoch() == params.BeaconConfig().FarFutureEpoch {
 		t.Fatal("expected exiting validator index to be marked as exiting")
 	}
+}
+
+func TestHydrateSignedBeaconBlock_NoError(t *testing.T) {
+	b := &eth.SignedBeaconBlock{}
+	b = HydrateSignedBeaconBlock(b)
+	_, err := b.HashTreeRoot()
+	require.NoError(t, err)
+	_, err = b.Block.HashTreeRoot()
+	require.NoError(t, err)
+	_, err = b.Block.Body.HashTreeRoot()
+	require.NoError(t, err)
 }

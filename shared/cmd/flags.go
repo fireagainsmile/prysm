@@ -219,6 +219,24 @@ var (
 		Name:  "accept-terms-of-use",
 		Usage: "Accept Terms and Conditions (for non-interactive environments)",
 	}
+	// RestoreSourceFileFlag specifies the filepath to the backed-up database file
+	// which will be used to restore the database.
+	RestoreSourceFileFlag = &cli.StringFlag{
+		Name:  "restore-source-file",
+		Usage: "Filepath to the backed-up database file which will be used to restore the database",
+	}
+	// RestoreTargetDirFlag specifies the target directory of the restored database.
+	RestoreTargetDirFlag = &cli.StringFlag{
+		Name:  "restore-target-dir",
+		Usage: "Target directory of the restored database",
+		Value: DefaultDataDir(),
+	}
+	// BoltMMapInitialSizeFlag specifies the initial size in bytes of boltdb's mmap syscall.
+	BoltMMapInitialSizeFlag = &cli.IntFlag{
+		Name:  "bolt-mmap-initial-size",
+		Usage: "Specifies the size in bytes of bolt db's mmap syscall allocation",
+		Value: 536870912, // 512 Mb as a default value.
+	}
 )
 
 // LoadFlagsFromConfig sets flags values from config file if ConfigFileFlag is set.

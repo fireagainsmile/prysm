@@ -10,6 +10,7 @@ import (
 
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/paulbellamy/ratecounter"
+	types "github.com/prysmaticlabs/eth2-types"
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
@@ -56,11 +57,7 @@ func (s *Service) roundRobinSync(genesis time.Time) error {
 
 	// Step 2 - sync to head from majority of peers (from no less than MinimumSyncPeers*2 peers)
 	// having the same world view on non-finalized epoch.
-	if err := s.syncToNonFinalizedEpoch(ctx, genesis); err != nil {
-		return err
-	}
-
-	return nil
+	return s.syncToNonFinalizedEpoch(ctx, genesis)
 }
 
 // syncToFinalizedEpoch sync from head to best known finalized epoch.
@@ -129,7 +126,7 @@ func (s *Service) syncToNonFinalizedEpoch(ctx context.Context, genesis time.Time
 
 // processFetchedData processes data received from queue.
 func (s *Service) processFetchedData(
-	ctx context.Context, genesis time.Time, startSlot uint64, data *blocksQueueFetchedData) {
+	ctx context.Context, genesis time.Time, startSlot types.Slot, data *blocksQueueFetchedData) {
 	defer s.updatePeerScorerStats(data.pid, startSlot)
 
 	// Use Batch Block Verify to process and verify batches directly.
@@ -140,7 +137,7 @@ func (s *Service) processFetchedData(
 
 // processFetchedData processes data received from queue.
 func (s *Service) processFetchedDataRegSync(
-	ctx context.Context, genesis time.Time, startSlot uint64, data *blocksQueueFetchedData) {
+	ctx context.Context, genesis time.Time, startSlot types.Slot, data *blocksQueueFetchedData) {
 	defer s.updatePeerScorerStats(data.pid, startSlot)
 
 	blockReceiver := s.chain.ReceiveBlock
@@ -168,8 +165,8 @@ func (s *Service) processFetchedDataRegSync(
 
 // highestFinalizedEpoch returns the absolute highest finalized epoch of all connected peers.
 // Note this can be lower than our finalized epoch if we have no peers or peers that are all behind us.
-func (s *Service) highestFinalizedEpoch() uint64 {
-	highest := uint64(0)
+func (s *Service) highestFinalizedEpoch() types.Epoch {
+	highest := types.Epoch(0)
 	for _, pid := range s.p2p.Peers().Connected() {
 		peerChainState, err := s.p2p.Peers().ChainState(pid)
 		if err == nil && peerChainState != nil && peerChainState.FinalizedEpoch > highest {
@@ -287,7 +284,7 @@ func (s *Service) processBatchedBlocks(ctx context.Context, genesis time.Time,
 }
 
 // updatePeerScorerStats adjusts monitored metrics for a peer.
-func (s *Service) updatePeerScorerStats(pid peer.ID, startSlot uint64) {
+func (s *Service) updatePeerScorerStats(pid peer.ID, startSlot types.Slot) {
 	if pid == "" {
 		return
 	}
@@ -297,7 +294,7 @@ func (s *Service) updatePeerScorerStats(pid peer.ID, startSlot uint64) {
 	}
 	if diff := s.chain.HeadSlot() - startSlot; diff > 0 {
 		scorer := s.p2p.Peers().Scorers().BlockProviderScorer()
-		scorer.IncrementProcessedBlocks(pid, diff)
+		scorer.IncrementProcessedBlocks(pid, uint64(diff))
 	}
 }
 

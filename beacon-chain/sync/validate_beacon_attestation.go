@@ -8,6 +8,7 @@ import (
 
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	types "github.com/prysmaticlabs/eth2-types"
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
@@ -59,11 +60,7 @@ func (s *Service) validateCommitteeIndexBeaconAttestation(ctx context.Context, p
 		return pubsub.ValidationReject
 	}
 
-	if att.Data == nil {
-		return pubsub.ValidationReject
-	}
-	// Attestation aggregation bits must exist.
-	if att.AggregationBits == nil {
+	if err := helpers.ValidateNilAttestation(att); err != nil {
 		return pubsub.ValidationReject
 	}
 
@@ -72,7 +69,7 @@ func (s *Service) validateCommitteeIndexBeaconAttestation(ctx context.Context, p
 		traceutil.AnnotateError(span, err)
 		return pubsub.ValidationIgnore
 	}
-	if helpers.SlotToEpoch(att.Data.Slot) != att.Data.Target.Epoch {
+	if err := helpers.ValidateSlotTargetEpoch(att.Data); err != nil {
 		return pubsub.ValidationReject
 	}
 
@@ -141,7 +138,7 @@ func (s *Service) validateUnaggregatedAttTopic(ctx context.Context, a *eth.Attes
 		return pubsub.ValidationIgnore
 	}
 	count := helpers.SlotCommitteeCount(valCount)
-	if a.Data.CommitteeIndex > count {
+	if uint64(a.Data.CommitteeIndex) > count {
 		return pubsub.ValidationReject
 	}
 	subnet := helpers.ComputeSubnetForAttestation(valCount, a)
@@ -193,20 +190,20 @@ func (s *Service) validateUnaggregatedAttWithState(ctx context.Context, a *eth.A
 }
 
 // Returns true if the attestation was already seen for the participating validator for the slot.
-func (s *Service) hasSeenCommitteeIndicesSlot(slot, committeeID uint64, aggregateBits []byte) bool {
+func (s *Service) hasSeenCommitteeIndicesSlot(slot types.Slot, committeeID types.CommitteeIndex, aggregateBits []byte) bool {
 	s.seenAttestationLock.RLock()
 	defer s.seenAttestationLock.RUnlock()
-	b := append(bytesutil.Bytes32(slot), bytesutil.Bytes32(committeeID)...)
+	b := append(bytesutil.Bytes32(uint64(slot)), bytesutil.Bytes32(uint64(committeeID))...)
 	b = append(b, aggregateBits...)
 	_, seen := s.seenAttestationCache.Get(string(b))
 	return seen
 }
 
 // Set committee's indices and slot as seen for incoming attestations.
-func (s *Service) setSeenCommitteeIndicesSlot(slot, committeeID uint64, aggregateBits []byte) {
+func (s *Service) setSeenCommitteeIndicesSlot(slot types.Slot, committeeID types.CommitteeIndex, aggregateBits []byte) {
 	s.seenAttestationLock.Lock()
 	defer s.seenAttestationLock.Unlock()
-	b := append(bytesutil.Bytes32(slot), bytesutil.Bytes32(committeeID)...)
+	b := append(bytesutil.Bytes32(uint64(slot)), bytesutil.Bytes32(uint64(committeeID))...)
 	b = append(b, aggregateBits...)
 	s.seenAttestationCache.Add(string(b), true)
 }
@@ -214,7 +211,7 @@ func (s *Service) setSeenCommitteeIndicesSlot(slot, committeeID uint64, aggregat
 // hasBlockAndState returns true if the beacon node knows about a block and associated state in the
 // database or cache.
 func (s *Service) hasBlockAndState(ctx context.Context, blockRoot [32]byte) bool {
-	hasStateSummary := s.stateSummaryCache.Has(blockRoot) || s.db.HasStateSummary(ctx, blockRoot)
+	hasStateSummary := s.db.HasStateSummary(ctx, blockRoot)
 	hasState := hasStateSummary || s.db.HasState(ctx, blockRoot)
 	hasBlock := s.chain.HasInitSyncBlock(blockRoot) || s.db.HasBlock(ctx, blockRoot)
 	return hasState && hasBlock

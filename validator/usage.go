@@ -65,6 +65,7 @@ var appHelpFlagGroups = []flagGroup{
 			cmd.ChainConfigFileFlag,
 			cmd.GrpcMaxCallRecvMsgSizeFlag,
 			cmd.AcceptTosFlag,
+			cmd.BoltMMapInitialSizeFlag,
 		},
 	},
 	{
@@ -76,6 +77,8 @@ var appHelpFlagGroups = []flagGroup{
 			debug.MemProfileRateFlag,
 			debug.CPUProfileFlag,
 			debug.TraceFlag,
+			debug.BlockProfileRateFlag,
+			debug.MutexProfileFractionFlag,
 		},
 	},
 	{
@@ -102,6 +105,7 @@ var appHelpFlagGroups = []flagGroup{
 			flags.WalletDirFlag,
 			flags.WalletPasswordFileFlag,
 			flags.GraffitiFileFlag,
+			flags.EnableDutyCountDown,
 		},
 	},
 	{

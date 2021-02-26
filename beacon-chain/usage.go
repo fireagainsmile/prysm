@@ -70,6 +70,9 @@ var appHelpFlagGroups = []flagGroup{
 			cmd.ChainConfigFileFlag,
 			cmd.GrpcMaxCallRecvMsgSizeFlag,
 			cmd.AcceptTosFlag,
+			cmd.RestoreSourceFileFlag,
+			cmd.RestoreTargetDirFlag,
+			cmd.BoltMMapInitialSizeFlag,
 		},
 	},
 	{
@@ -81,6 +84,8 @@ var appHelpFlagGroups = []flagGroup{
 			debug.MemProfileRateFlag,
 			debug.CPUProfileFlag,
 			debug.TraceFlag,
+			debug.BlockProfileRateFlag,
+			debug.MutexProfileFractionFlag,
 		},
 	},
 	{
@@ -99,6 +104,7 @@ var appHelpFlagGroups = []flagGroup{
 			flags.GRPCGatewayPort,
 			flags.GPRCGatewayCorsDomain,
 			flags.HTTPWeb3ProviderFlag,
+			flags.FallbackWeb3ProviderFlag,
 			flags.SetGCPercent,
 			flags.HeadSync,
 			flags.DisableSync,

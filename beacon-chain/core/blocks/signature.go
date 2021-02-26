@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 
 	"github.com/pkg/errors"
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
@@ -15,7 +16,7 @@ import (
 )
 
 // retrieves the signature set from the raw data, public key,signature and domain provided.
-func retrieveSignatureSet(signedData, pub, signature, domain []byte) (*bls.SignatureSet, error) {
+func signatureSet(signedData, pub, signature, domain []byte) (*bls.SignatureSet, error) {
 	publicKey, err := bls.PublicKeyFromBytes(pub)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not convert bytes to public key")
@@ -37,7 +38,7 @@ func retrieveSignatureSet(signedData, pub, signature, domain []byte) (*bls.Signa
 
 // verifies the signature from the raw data, public key and domain provided.
 func verifySignature(signedData, pub, signature, domain []byte) error {
-	set, err := retrieveSignatureSet(signedData, pub, signature, domain)
+	set, err := signatureSet(signedData, pub, signature, domain)
 	if err != nil {
 		return err
 	}
@@ -85,7 +86,7 @@ func BlockSignatureSet(beaconState *stateTrie.BeaconState, block *ethpb.SignedBe
 		return nil, err
 	}
 	proposerPubKey := proposer.PublicKey
-	return helpers.RetrieveBlockSignatureSet(block.Block, proposerPubKey, block.Signature, domain)
+	return helpers.BlockSignatureSet(block.Block, proposerPubKey, block.Signature, domain)
 }
 
 // RandaoSignatureSet retrieves the relevant randao specific signature set object
@@ -97,7 +98,7 @@ func RandaoSignatureSet(beaconState *stateTrie.BeaconState,
 	if err != nil {
 		return nil, err
 	}
-	set, err := retrieveSignatureSet(buf, proposerPub, body.RandaoReveal, domain)
+	set, err := signatureSet(buf, proposerPub, body.RandaoReveal, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func randaoSigningData(beaconState *stateTrie.BeaconState) ([]byte, []byte, []by
 
 	currentEpoch := helpers.SlotToEpoch(beaconState.Slot())
 	buf := make([]byte, 32)
-	binary.LittleEndian.PutUint64(buf, currentEpoch)
+	binary.LittleEndian.PutUint64(buf, uint64(currentEpoch))
 
 	domain, err := helpers.Domain(beaconState.Fork(), currentEpoch, params.BeaconConfig().DomainRandao, beaconState.GenesisValidatorRoot())
 	if err != nil {
@@ -138,14 +139,17 @@ func createAttestationSignatureSet(ctx context.Context, beaconState *stateTrie.B
 		if err != nil {
 			return nil, err
 		}
-		ia := attestationutil.ConvertToIndexed(ctx, a, c)
+		ia, err := attestationutil.ConvertToIndexed(ctx, a, c)
+		if err != nil {
+			return nil, err
+		}
 		if err := attestationutil.IsValidAttestationIndices(ctx, ia); err != nil {
 			return nil, err
 		}
 		indices := ia.AttestingIndices
 		pubkeys := make([][]byte, len(indices))
 		for i := 0; i < len(indices); i++ {
-			pubkeyAtIdx := beaconState.PubkeyAtIndex(indices[i])
+			pubkeyAtIdx := beaconState.PubkeyAtIndex(types.ValidatorIndex(indices[i]))
 			pubkeys[i] = pubkeyAtIdx[:]
 		}
 		aggP, err := bls.AggregatePublicKeys(pubkeys)

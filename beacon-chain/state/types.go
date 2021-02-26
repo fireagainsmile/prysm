@@ -4,13 +4,15 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	coreutils "github.com/prysmaticlabs/prysm/beacon-chain/core/state/stateutils"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
 func init() {
-	fieldMap = make(map[fieldIndex]dataType, fieldCount)
+	fieldMap = make(map[fieldIndex]dataType, params.BeaconConfig().BeaconStateFieldCount)
 
 	// Initialize the fixed sized arrays.
 	fieldMap[blockRoots] = basicArray
@@ -177,7 +179,7 @@ func (r *reference) MinusRef() {
 // a container to hold the map and a reference tracker for how many
 // states shared this.
 type validatorMapHandler struct {
-	valIdxMap map[[48]byte]uint64
+	valIdxMap map[[48]byte]types.ValidatorIndex
 	mapRef    *reference
 }
 
@@ -192,9 +194,9 @@ func newValHandler(vals []*ethpb.Validator) *validatorMapHandler {
 // copies the whole map and returns a map handler with the copied map.
 func (v *validatorMapHandler) copy() *validatorMapHandler {
 	if v == nil || v.valIdxMap == nil {
-		return &validatorMapHandler{valIdxMap: map[[48]byte]uint64{}, mapRef: new(reference)}
+		return &validatorMapHandler{valIdxMap: map[[48]byte]types.ValidatorIndex{}, mapRef: new(reference)}
 	}
-	m := make(map[[48]byte]uint64, len(v.valIdxMap))
+	m := make(map[[48]byte]types.ValidatorIndex, len(v.valIdxMap))
 	for k, v := range v.valIdxMap {
 		m[k] = v
 	}

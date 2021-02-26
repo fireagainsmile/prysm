@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	mockChain "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache/depositcache"
@@ -24,7 +25,7 @@ import (
 )
 
 func TestValidatorStatus_DepositedEth1(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 	deposits, _, err := testutil.DeterministicDepositsAndKeys(1)
 	require.NoError(t, err, "Could not generate deposits and keys")
@@ -62,7 +63,7 @@ func TestValidatorStatus_DepositedEth1(t *testing.T) {
 }
 
 func TestValidatorStatus_Deposited(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey1 := pubKey(1)
@@ -114,7 +115,7 @@ func TestValidatorStatus_Deposited(t *testing.T) {
 }
 
 func TestValidatorStatus_PartiallyDeposited(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey1 := pubKey(1)
@@ -166,7 +167,7 @@ func TestValidatorStatus_PartiallyDeposited(t *testing.T) {
 }
 
 func TestValidatorStatus_Pending(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
@@ -175,7 +176,8 @@ func TestValidatorStatus_Pending(t *testing.T) {
 	genesisRoot, err := block.Block.HashTreeRoot()
 	require.NoError(t, err, "Could not get signing root")
 	// Pending active because activation epoch is still defaulted at far future slot.
-	state := testutil.NewBeaconState()
+	state, err := testutil.NewBeaconState()
+	require.NoError(t, err)
 	require.NoError(t, state.SetSlot(5000))
 	err = state.SetValidators([]*ethpb.Validator{
 		{
@@ -229,7 +231,7 @@ func TestValidatorStatus_Pending(t *testing.T) {
 }
 
 func TestValidatorStatus_Active(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	// This test breaks if it doesnt use mainnet config
 	params.SetupTestConfigCleanup(t)
 	params.OverrideBeaconConfig(params.MainnetConfig())
@@ -303,13 +305,13 @@ func TestValidatorStatus_Active(t *testing.T) {
 }
 
 func TestValidatorStatus_Exiting(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
 
 	// Initiated exit because validator exit epoch and withdrawable epoch are not FAR_FUTURE_EPOCH
-	slot := uint64(10000)
+	slot := types.Slot(10000)
 	epoch := helpers.SlotToEpoch(slot)
 	exitEpoch := helpers.ActivationExitEpoch(epoch)
 	withdrawableEpoch := exitEpoch + params.BeaconConfig().MinValidatorWithdrawabilityDelay
@@ -366,13 +368,13 @@ func TestValidatorStatus_Exiting(t *testing.T) {
 }
 
 func TestValidatorStatus_Slashing(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
 
 	// Exit slashed because slashed is true, exit epoch is =< current epoch and withdrawable epoch > epoch .
-	slot := uint64(10000)
+	slot := types.Slot(10000)
 	epoch := helpers.SlotToEpoch(slot)
 	block := testutil.NewBeaconBlock()
 	require.NoError(t, db.SaveBlock(ctx, block), "Could not save genesis block")
@@ -426,13 +428,13 @@ func TestValidatorStatus_Slashing(t *testing.T) {
 }
 
 func TestValidatorStatus_Exited(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
 
 	// Exit because only exit epoch is =< current epoch.
-	slot := uint64(10000)
+	slot := types.Slot(10000)
 	epoch := helpers.SlotToEpoch(slot)
 	block := testutil.NewBeaconBlock()
 	require.NoError(t, db.SaveBlock(ctx, block), "Could not save genesis block")
@@ -444,7 +446,8 @@ func TestValidatorStatus_Exited(t *testing.T) {
 	beaconState, _ := testutil.DeterministicGenesisState(t, numDeposits)
 	require.NoError(t, db.SaveState(ctx, beaconState, genesisRoot))
 	require.NoError(t, db.SaveHeadBlockRoot(ctx, genesisRoot), "Could not save genesis state")
-	state := testutil.NewBeaconState()
+	state, err := testutil.NewBeaconState()
+	require.NoError(t, err)
 	require.NoError(t, state.SetSlot(slot))
 	err = state.SetValidators([]*ethpb.Validator{{
 		PublicKey:             pubKey,
@@ -490,7 +493,7 @@ func TestValidatorStatus_Exited(t *testing.T) {
 }
 
 func TestValidatorStatus_UnknownStatus(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	pubKey := pubKey(1)
 	depositCache, err := depositcache.New()
 	require.NoError(t, err)
@@ -516,7 +519,7 @@ func TestValidatorStatus_UnknownStatus(t *testing.T) {
 }
 
 func TestActivationStatus_OK(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	deposits, _, err := testutil.DeterministicDepositsAndKeys(4)
@@ -592,7 +595,7 @@ func TestActivationStatus_OK(t *testing.T) {
 		t.Errorf("Validator with pubkey %#x is not unknown and instead has this status: %s",
 			response[2].PublicKey, response[2].Status.Status.String())
 	}
-	if response[2].Index != params.BeaconConfig().FarFutureEpoch {
+	if uint64(response[2].Index) != uint64(params.BeaconConfig().FarFutureEpoch) {
 		t.Errorf("Validator with pubkey %#x is expected to have index %d, received %d", response[2].PublicKey, params.BeaconConfig().FarFutureEpoch, response[2].Index)
 	}
 
@@ -606,7 +609,7 @@ func TestActivationStatus_OK(t *testing.T) {
 }
 
 func TestValidatorStatus_CorrectActivationQueue(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pbKey := pubKey(5)
@@ -614,7 +617,7 @@ func TestValidatorStatus_CorrectActivationQueue(t *testing.T) {
 	require.NoError(t, db.SaveBlock(ctx, block), "Could not save genesis block")
 	genesisRoot, err := block.Block.HashTreeRoot()
 	require.NoError(t, err, "Could not get signing root")
-	currentSlot := uint64(5000)
+	currentSlot := types.Slot(5000)
 	// Pending active because activation epoch is still defaulted at far future slot.
 	validators := []*ethpb.Validator{
 		{
@@ -646,21 +649,22 @@ func TestValidatorStatus_CorrectActivationQueue(t *testing.T) {
 			WithdrawableEpoch:     params.BeaconConfig().FarFutureEpoch,
 		},
 		{
-			ActivationEpoch:       currentSlot/params.BeaconConfig().SlotsPerEpoch + 1,
+			ActivationEpoch:       types.Epoch(currentSlot/params.BeaconConfig().SlotsPerEpoch + 1),
 			PublicKey:             pbKey,
 			WithdrawalCredentials: make([]byte, 32),
 			ExitEpoch:             params.BeaconConfig().FarFutureEpoch,
 			WithdrawableEpoch:     params.BeaconConfig().FarFutureEpoch,
 		},
 		{
-			ActivationEpoch:       currentSlot/params.BeaconConfig().SlotsPerEpoch + 4,
+			ActivationEpoch:       types.Epoch(currentSlot/params.BeaconConfig().SlotsPerEpoch + 4),
 			PublicKey:             pubKey(5),
 			WithdrawalCredentials: make([]byte, 32),
 			ExitEpoch:             params.BeaconConfig().FarFutureEpoch,
 			WithdrawableEpoch:     params.BeaconConfig().FarFutureEpoch,
 		},
 	}
-	state := testutil.NewBeaconState()
+	state, err := testutil.NewBeaconState()
+	require.NoError(t, err)
 	require.NoError(t, state.SetValidators(validators))
 	require.NoError(t, state.SetSlot(currentSlot))
 	require.NoError(t, db.SaveState(ctx, state, genesisRoot), "Could not save state")
@@ -709,7 +713,7 @@ func TestValidatorStatus_CorrectActivationQueue(t *testing.T) {
 }
 
 func TestMultipleValidatorStatus_Pubkeys(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	deposits, _, err := testutil.DeterministicDepositsAndKeys(6)
@@ -820,8 +824,8 @@ func TestMultipleValidatorStatus_Pubkeys(t *testing.T) {
 }
 
 func TestMultipleValidatorStatus_Indices(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
-	slot := uint64(10000)
+	db := dbutil.SetupDB(t)
+	slot := types.Slot(10000)
 	epoch := helpers.SlotToEpoch(slot)
 	pubKeys := [][]byte{pubKey(1), pubKey(2), pubKey(3), pubKey(4), pubKey(5), pubKey(6), pubKey(7)}
 	beaconState := &pbp2p.BeaconState{
@@ -918,7 +922,7 @@ func TestMultipleValidatorStatus_Indices(t *testing.T) {
 }
 
 func TestValidatorStatus_Invalid(t *testing.T) {
-	db, _ := dbutil.SetupDB(t)
+	db := dbutil.SetupDB(t)
 	ctx := context.Background()
 	deposits, _, err := testutil.DeterministicDepositsAndKeys(1)
 	require.NoError(t, err, "Could not generate deposits and keys")

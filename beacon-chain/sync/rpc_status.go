@@ -3,14 +3,14 @@ package sync
 import (
 	"bytes"
 	"context"
+	"sync"
 	"time"
 
 	libp2pcore "github.com/libp2p/go-libp2p-core"
-	streamhelpers "github.com/libp2p/go-libp2p-core/helpers"
-	"github.com/libp2p/go-libp2p-core/mux"
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/pkg/errors"
+	types "github.com/prysmaticlabs/eth2-types"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
@@ -28,10 +28,13 @@ import (
 // maintainPeerStatuses by infrequently polling peers for their latest status.
 func (s *Service) maintainPeerStatuses() {
 	// Run twice per epoch.
-	interval := time.Duration(params.BeaconConfig().SecondsPerSlot*params.BeaconConfig().SlotsPerEpoch/2) * time.Second
+	interval := time.Duration(params.BeaconConfig().SlotsPerEpoch.Div(2).Mul(params.BeaconConfig().SecondsPerSlot)) * time.Second
 	runutil.RunEvery(s.ctx, interval, func() {
+		wg := new(sync.WaitGroup)
 		for _, pid := range s.p2p.Peers().Connected() {
+			wg.Add(1)
 			go func(id peer.ID) {
+				defer wg.Done()
 				// If our peer status has not been updated correctly we disconnect over here
 				// and set the connection state over here instead.
 				if s.p2p.Host().Network().Connectedness(id) != network.Connected {
@@ -61,15 +64,24 @@ func (s *Service) maintainPeerStatuses() {
 				}
 			}(pid)
 		}
+		// Wait for all status checks to finish and then proceed onwards to
+		// pruning excess peers.
+		wg.Wait()
+		peerIds := s.p2p.Peers().PeersToPrune()
+		for _, id := range peerIds {
+			if err := s.sendGoodByeAndDisconnect(s.ctx, p2ptypes.GoodbyeCodeTooManyPeers, id); err != nil {
+				log.WithField("peer", id).WithError(err).Debug("Could not disconnect with peer")
+			}
+		}
 	})
 }
 
 // resyncIfBehind checks periodically to see if we are in normal sync but have fallen behind our peers
 // by more than an epoch, in which case we attempt a resync using the initial sync method to catch up.
 func (s *Service) resyncIfBehind() {
-	millisecondsPerEpoch := params.BeaconConfig().SecondsPerSlot * params.BeaconConfig().SlotsPerEpoch * 1000
+	millisecondsPerEpoch := int64(params.BeaconConfig().SlotsPerEpoch.Mul(1000).Mul(params.BeaconConfig().SecondsPerSlot))
 	// Run sixteen times per epoch.
-	interval := time.Duration(int64(millisecondsPerEpoch)/16) * time.Millisecond
+	interval := time.Duration(millisecondsPerEpoch/16) * time.Millisecond
 	runutil.RunEvery(s.ctx, interval, func() {
 		if s.shouldReSync() {
 			syncedEpoch := helpers.SlotToEpoch(s.chain.HeadSlot())
@@ -98,7 +110,7 @@ func (s *Service) resyncIfBehind() {
 func (s *Service) shouldReSync() bool {
 	syncedEpoch := helpers.SlotToEpoch(s.chain.HeadSlot())
 	currentEpoch := helpers.SlotToEpoch(s.chain.CurrentSlot())
-	prevEpoch := uint64(0)
+	prevEpoch := types.Epoch(0)
 	if currentEpoch > 1 {
 		prevEpoch = currentEpoch - 1
 	}
@@ -130,11 +142,7 @@ func (s *Service) sendRPCStatusRequest(ctx context.Context, id peer.ID) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := streamhelpers.FullClose(stream); err != nil && err.Error() != mux.ErrReset.Error() {
-			log.WithError(err).Debugf("Could not reset stream with protocol %s", stream.Protocol())
-		}
-	}()
+	defer closeStream(stream, log)
 
 	code, errMsg, err := ReadStatusCode(stream, s.p2p.Encoding())
 	if err != nil {
@@ -175,11 +183,6 @@ func (s *Service) reValidatePeer(ctx context.Context, id peer.ID) error {
 // statusRPCHandler reads the incoming Status RPC from the peer and responds with our version of a status message.
 // This handler will disconnect any peer that does not match our fork version.
 func (s *Service) statusRPCHandler(ctx context.Context, msg interface{}, stream libp2pcore.Stream) error {
-	defer func() {
-		if err := stream.Close(); err != nil {
-			log.WithError(err).Debug("Could not close stream")
-		}
-	}()
 	ctx, cancel := context.WithTimeout(ctx, ttfbTimeout)
 	defer cancel()
 	SetRPCStreamDeadlines(stream)
@@ -210,9 +213,8 @@ func (s *Service) statusRPCHandler(ctx context.Context, msg interface{}, stream 
 			if err := s.respondWithStatus(ctx, stream); err != nil {
 				return err
 			}
-			if err := stream.Close(); err != nil { // Close before disconnecting.
-				log.WithError(err).Debug("Could not close stream")
-			}
+			// Close before disconnecting, and wait for the other end to ack our response.
+			closeStreamAndWait(stream, log)
 			if err := s.sendGoodByeAndDisconnect(ctx, p2ptypes.GoodbyeCodeWrongNetwork, remotePeer); err != nil {
 				return err
 			}
@@ -230,9 +232,7 @@ func (s *Service) statusRPCHandler(ctx context.Context, msg interface{}, stream 
 			// The peer may already be ignoring us, as we disagree on fork version, so log this as debug only.
 			log.WithError(err).Debug("Could not write to stream")
 		}
-		if err := stream.Close(); err != nil { // Close before disconnecting.
-			log.WithError(err).Debug("Could not close stream")
-		}
+		closeStreamAndWait(stream, log)
 		if err := s.sendGoodByeAndDisconnect(ctx, p2ptypes.GoodbyeCodeGenericError, remotePeer); err != nil {
 			return err
 		}
@@ -240,7 +240,11 @@ func (s *Service) statusRPCHandler(ctx context.Context, msg interface{}, stream 
 	}
 	s.p2p.Peers().SetChainState(remotePeer, m)
 
-	return s.respondWithStatus(ctx, stream)
+	if err := s.respondWithStatus(ctx, stream); err != nil {
+		return err
+	}
+	closeStream(stream, log)
+	return nil
 }
 
 func (s *Service) respondWithStatus(ctx context.Context, stream network.Stream) error {
@@ -281,7 +285,7 @@ func (s *Service) validateStatusMessage(ctx context.Context, msg *pb.Status) err
 	maxEpoch := slotutil.EpochsSinceGenesis(genesis)
 	// It would take a minimum of 2 epochs to finalize a
 	// previous epoch
-	maxFinalizedEpoch := uint64(0)
+	maxFinalizedEpoch := types.Epoch(0)
 	if maxEpoch > 2 {
 		maxFinalizedEpoch = maxEpoch - 2
 	}

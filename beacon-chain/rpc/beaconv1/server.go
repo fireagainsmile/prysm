@@ -39,9 +39,9 @@ type Server struct {
 	AttestationNotifier operation.Notifier
 	Broadcaster         p2p.Broadcaster
 	AttestationsPool    attestations.Pool
-	SlashingsPool       *slashings.Pool
+	SlashingsPool       slashings.PoolManager
 	CanonicalStateChan  chan *pbp2p.BeaconState
 	ChainStartChan      chan time.Time
-	StateGen            *stategen.State
+	StateGenService     stategen.StateManager
 	SyncChecker         sync.Checker
 }

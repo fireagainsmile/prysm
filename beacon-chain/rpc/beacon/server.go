@@ -31,6 +31,7 @@ type Server struct {
 	Ctx                         context.Context
 	ChainStartFetcher           powchain.ChainStartFetcher
 	HeadFetcher                 blockchain.HeadFetcher
+	CanonicalFetcher            blockchain.CanonicalFetcher
 	FinalizationFetcher         blockchain.FinalizationFetcher
 	DepositFetcher              depositcache.DepositFetcher
 	BlockFetcher                powchain.POWBlockFetcher
@@ -40,7 +41,7 @@ type Server struct {
 	AttestationNotifier         operation.Notifier
 	Broadcaster                 p2p.Broadcaster
 	AttestationsPool            attestations.Pool
-	SlashingsPool               *slashings.Pool
+	SlashingsPool               slashings.PoolManager
 	CanonicalStateChan          chan *pbp2p.BeaconState
 	ChainStartChan              chan time.Time
 	ReceivedAttestationsBuffer  chan *ethpb.Attestation

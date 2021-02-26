@@ -11,6 +11,7 @@ import (
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/protocol"
 	gcache "github.com/patrickmn/go-cache"
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	mock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	dbtest "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
@@ -31,7 +32,7 @@ import (
 //    \- b3
 // Test b1 was missing then received and we can process b0 -> b1 -> b2
 func TestRegularSyncBeaconBlockSubscriber_ProcessPendingBlocks1(t *testing.T) {
-	db, stateSummaryCache := dbtest.SetupDB(t)
+	db := dbtest.SetupDB(t)
 
 	p1 := p2ptest.NewTestP2P(t)
 	r := &Service{
@@ -44,8 +45,7 @@ func TestRegularSyncBeaconBlockSubscriber_ProcessPendingBlocks1(t *testing.T) {
 		},
 		slotToPendingBlocks: gcache.New(time.Second, 2*time.Second),
 		seenPendingBlocks:   make(map[[32]byte]bool),
-		stateSummaryCache:   stateSummaryCache,
-		stateGen:            stategen.New(db, stateSummaryCache),
+		stateGen:            stategen.New(db),
 	}
 	err := r.initCaches()
 	require.NoError(t, err)
@@ -92,7 +92,7 @@ func TestRegularSyncBeaconBlockSubscriber_ProcessPendingBlocks1(t *testing.T) {
 }
 
 func TestRegularSync_InsertDuplicateBlocks(t *testing.T) {
-	db, _ := dbtest.SetupDB(t)
+	db := dbtest.SetupDB(t)
 
 	p1 := p2ptest.NewTestP2P(t)
 	r := &Service{
@@ -141,7 +141,7 @@ func TestRegularSync_InsertDuplicateBlocks(t *testing.T) {
 //    \- b3 - b4
 // Test b2 and b3 were missed, after receiving them we can process 2 chains.
 func TestRegularSyncBeaconBlockSubscriber_ProcessPendingBlocks_2Chains(t *testing.T) {
-	db, stateSummaryCache := dbtest.SetupDB(t)
+	db := dbtest.SetupDB(t)
 	p1 := p2ptest.NewTestP2P(t)
 	p2 := p2ptest.NewTestP2P(t)
 	p1.Connect(p2)
@@ -173,8 +173,7 @@ func TestRegularSyncBeaconBlockSubscriber_ProcessPendingBlocks_2Chains(t *testin
 		},
 		slotToPendingBlocks: gcache.New(time.Second, 2*time.Second),
 		seenPendingBlocks:   make(map[[32]byte]bool),
-		stateSummaryCache:   stateSummaryCache,
-		stateGen:            stategen.New(db, stateSummaryCache),
+		stateGen:            stategen.New(db),
 	}
 	err := r.initCaches()
 	require.NoError(t, err)
@@ -247,7 +246,7 @@ func TestRegularSyncBeaconBlockSubscriber_ProcessPendingBlocks_2Chains(t *testin
 }
 
 func TestRegularSyncBeaconBlockSubscriber_PruneOldPendingBlocks(t *testing.T) {
-	db, _ := dbtest.SetupDB(t)
+	db := dbtest.SetupDB(t)
 	p1 := p2ptest.NewTestP2P(t)
 	p2 := p2ptest.NewTestP2P(t)
 	p1.Connect(p2)
@@ -320,18 +319,18 @@ func TestService_sortedPendingSlots(t *testing.T) {
 		seenPendingBlocks:   make(map[[32]byte]bool),
 	}
 
-	var lastSlot uint64 = math.MaxUint64
-	require.NoError(t, r.insertBlockToPendingQueue(lastSlot, &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot}}, [32]byte{1}))
-	require.NoError(t, r.insertBlockToPendingQueue(lastSlot-3, &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot - 3}}, [32]byte{2}))
-	require.NoError(t, r.insertBlockToPendingQueue(lastSlot-5, &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot - 5}}, [32]byte{3}))
-	require.NoError(t, r.insertBlockToPendingQueue(lastSlot-2, &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot - 2}}, [32]byte{4}))
+	var lastSlot types.Slot = math.MaxUint64
+	require.NoError(t, r.insertBlockToPendingQueue(lastSlot, testutil.HydrateSignedBeaconBlock(&ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot}}), [32]byte{1}))
+	require.NoError(t, r.insertBlockToPendingQueue(lastSlot-3, testutil.HydrateSignedBeaconBlock(&ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot - 3}}), [32]byte{2}))
+	require.NoError(t, r.insertBlockToPendingQueue(lastSlot-5, testutil.HydrateSignedBeaconBlock(&ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot - 5}}), [32]byte{3}))
+	require.NoError(t, r.insertBlockToPendingQueue(lastSlot-2, testutil.HydrateSignedBeaconBlock(&ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: lastSlot - 2}}), [32]byte{4}))
 
-	want := []uint64{lastSlot - 5, lastSlot - 3, lastSlot - 2, lastSlot}
+	want := []types.Slot{lastSlot - 5, lastSlot - 3, lastSlot - 2, lastSlot}
 	assert.DeepEqual(t, want, r.sortedPendingSlots(), "Unexpected pending slots list")
 }
 
 func TestService_BatchRootRequest(t *testing.T) {
-	db, _ := dbtest.SetupDB(t)
+	db := dbtest.SetupDB(t)
 	p1 := p2ptest.NewTestP2P(t)
 	p2 := p2ptest.NewTestP2P(t)
 	p1.Connect(p2)

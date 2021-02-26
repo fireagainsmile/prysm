@@ -6,11 +6,11 @@ import (
 	"time"
 
 	libp2pcore "github.com/libp2p/go-libp2p-core"
-	"github.com/libp2p/go-libp2p-core/helpers"
-	"github.com/libp2p/go-libp2p-core/mux"
+	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/types"
+	"github.com/prysmaticlabs/prysm/shared/mputil"
 	"github.com/sirupsen/logrus"
 )
 
@@ -33,11 +33,6 @@ var backOffTime = map[types.SSZUint64]time.Duration{
 
 // goodbyeRPCHandler reads the incoming goodbye rpc message from the peer.
 func (s *Service) goodbyeRPCHandler(_ context.Context, msg interface{}, stream libp2pcore.Stream) error {
-	defer func() {
-		if err := stream.Close(); err != nil {
-			log.WithError(err).Debug("Could not close stream")
-		}
-	}()
 	SetRPCStreamDeadlines(stream)
 
 	m, ok := msg.(*types.SSZUint64)
@@ -74,6 +69,14 @@ func (s *Service) sendGoodbye(ctx context.Context, id peer.ID) error {
 }
 
 func (s *Service) sendGoodByeAndDisconnect(ctx context.Context, code types.RPCGoodbyeCode, id peer.ID) error {
+	lock := mputil.NewMultilock(id.String())
+	lock.Lock()
+	defer lock.Unlock()
+	// In the event we are already disconnected, exit early from the
+	// goodbye method to prevent redundant streams from being created.
+	if s.p2p.Host().Network().Connectedness(id) == network.NotConnected {
+		return nil
+	}
 	if err := s.sendGoodByeMessage(ctx, code, id); err != nil {
 		log.WithFields(logrus.Fields{
 			"error": err,
@@ -91,13 +94,22 @@ func (s *Service) sendGoodByeMessage(ctx context.Context, code types.RPCGoodbyeC
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := helpers.FullClose(stream); err != nil && err.Error() != mux.ErrReset.Error() {
-			log.WithError(err).Debugf("Could not reset stream with protocol %s", stream.Protocol())
-		}
-	}()
+	defer closeStream(stream, log)
+
 	log := log.WithField("Reason", goodbyeMessage(code))
 	log.WithField("peer", stream.Conn().RemotePeer()).Debug("Sending Goodbye message to peer")
+
+	// Wait up to the response timeout for the peer to receive the goodbye
+	// and close the stream (or disconnect). We usually don't bother waiting
+	// around for an EOF, but we're going to close this connection
+	// immediately after we say goodbye.
+	//
+	// NOTE: we don't actually check the response as there's nothing we can
+	// do if something fails. We just need to wait for it.
+	SetStreamReadDeadline(stream, respTimeout)
+	_, _err := stream.Read([]byte{0})
+	_ = _err
+
 	return nil
 }
 

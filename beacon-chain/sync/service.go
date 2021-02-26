@@ -16,7 +16,6 @@ import (
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain"
-	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
 	blockfeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/block"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed/operation"
@@ -42,13 +41,12 @@ const rangeLimit = 1024
 const seenBlockSize = 1000
 const seenAttSize = 10000
 const seenExitSize = 100
-const seenAttesterSlashingSize = 100
 const seenProposerSlashingSize = 100
 const badBlockSize = 1000
 
 const syncMetricsInterval = 10 * time.Second
 
-var pendingBlockExpTime = time.Duration(params.BeaconConfig().SlotsPerEpoch*params.BeaconConfig().SecondsPerSlot) * time.Second // Seconds in one epoch.
+var pendingBlockExpTime = time.Duration(params.BeaconConfig().SlotsPerEpoch.Mul(params.BeaconConfig().SecondsPerSlot)) * time.Second // Seconds in one epoch.
 
 // Config to set up the regular sync service.
 type Config struct {
@@ -56,13 +54,12 @@ type Config struct {
 	DB                  db.NoHeadAccessDatabase
 	AttPool             attestations.Pool
 	ExitPool            *voluntaryexits.Pool
-	SlashingPool        *slashings.Pool
+	SlashingPool        slashings.PoolManager
 	Chain               blockchainService
 	InitialSync         Checker
 	StateNotifier       statefeed.Notifier
 	BlockNotifier       blockfeed.Notifier
 	AttestationNotifier operation.Notifier
-	StateSummaryCache   *cache.StateSummaryCache
 	StateGen            *stategen.State
 }
 
@@ -87,7 +84,7 @@ type Service struct {
 	db                        db.NoHeadAccessDatabase
 	attPool                   attestations.Pool
 	exitPool                  *voluntaryexits.Pool
-	slashingPool              *slashings.Pool
+	slashingPool              slashings.PoolManager
 	chain                     blockchainService
 	slotToPendingBlocks       *gcache.Cache
 	seenPendingBlocks         map[[32]byte]bool
@@ -110,10 +107,9 @@ type Service struct {
 	seenProposerSlashingLock  sync.RWMutex
 	seenProposerSlashingCache *lru.Cache
 	seenAttesterSlashingLock  sync.RWMutex
-	seenAttesterSlashingCache *lru.Cache
+	seenAttesterSlashingCache map[uint64]bool
 	badBlockCache             *lru.Cache
 	badBlockLock              sync.RWMutex
-	stateSummaryCache         *cache.StateSummaryCache
 	stateGen                  *stategen.State
 }
 
@@ -140,7 +136,6 @@ func NewService(ctx context.Context, cfg *Config) *Service {
 		blkRootToPendingAtts: make(map[[32]byte][]*ethpb.SignedAggregateAttestationAndProof),
 		stateNotifier:        cfg.StateNotifier,
 		blockNotifier:        cfg.BlockNotifier,
-		stateSummaryCache:    cfg.StateSummaryCache,
 		stateGen:             cfg.StateGen,
 		rateLimiter:          rLimiter,
 	}
@@ -220,10 +215,6 @@ func (s *Service) initCaches() error {
 	if err != nil {
 		return err
 	}
-	attesterSlashingCache, err := lru.New(seenAttesterSlashingSize)
-	if err != nil {
-		return err
-	}
 	proposerSlashingCache, err := lru.New(seenProposerSlashingSize)
 	if err != nil {
 		return err
@@ -235,7 +226,7 @@ func (s *Service) initCaches() error {
 	s.seenBlockCache = blkCache
 	s.seenAttestationCache = attCache
 	s.seenExitCache = exitCache
-	s.seenAttesterSlashingCache = attesterSlashingCache
+	s.seenAttesterSlashingCache = make(map[uint64]bool)
 	s.seenProposerSlashingCache = proposerSlashingCache
 	s.badBlockCache = badBlockCache
 
@@ -298,6 +289,7 @@ func (s *Service) markForChainStart() {
 // Checker defines a struct which can verify whether a node is currently
 // synchronizing a chain with the rest of peers in the network.
 type Checker interface {
+	Initialized() bool
 	Syncing() bool
 	Status() error
 	Resync() error
